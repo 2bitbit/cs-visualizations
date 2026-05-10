@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>分治法：循环赛日程表可视化</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        canvas { touch-action: none; }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen p-4 md:p-8 flex justify-center">
+
+<div id="root" class="w-full max-w-4xl"></div>
+
+<script type="text/babel">
+    const { useState, useEffect, useRef, useMemo } = React;
+
+    // 核心算法：生成可视化所需的每一个步骤
+    function generateAlgorithmSteps(k) {
+        const n = Math.pow(2, k);
+        const steps = [];
+        
+        // 初始化矩阵
+        const table = Array(n).fill(null).map(() => Array(n).fill(0));
+        table[0][0] = 1;
+        
+        steps.push({
+            title: "步骤 0：初始化基础解",
+            desc: "规模为 1 (n=1)。矩阵仅有一个元素 1，代表选手 1 自己。这是分治算法的基础情况(Base Case)。",
+            table: JSON.parse(JSON.stringify(table)),
+            highlights: [{ rStart: 0, rEnd: 0, cStart: 0, cEnd: 0, type: 'source' }]
+        });
+
+        let m = 1; // 当前合并的规模
+        while (m < n) {
+            // 1. 生成左下角 (左上角元素 + m)
+            for (let i = 0; i < m; i++) {
+                for (let j = 0; j < m; j++) {
+                    table[i + m][j] = table[i][j] + m;
+                }
+            }
+            steps.push({
+                title: `规模扩展至 n=${m*2} (第1/3步)：计算左下角`,
+                desc: `将左上角区域（${m}x${m}）的每个编号加上 ${m}，生成左下角区域。这是因为下半区的新选手编号比上半区依次大 ${m}。`,
+                table: JSON.parse(JSON.stringify(table)),
+                highlights: [
+                    { rStart: 0, rEnd: m - 1, cStart: 0, cEnd: m - 1, type: 'source' },
+                    { rStart: m, rEnd: 2 * m - 1, cStart: 0, cEnd: m - 1, type: 'target' }
+                ]
+            });
+
+            // 2. 右上角：复制左下角
+            for (let i = 0; i < m; i++) {
+                for (let j = 0; j < m; j++) {
+                    table[i][j + m] = table[i + m][j];
+                }
+            }
+            steps.push({
+                title: `规模扩展至 n=${m*2} (第2/3步)：交叉对决 (复制至右上角)`,
+                desc: `将左下角的矩阵块原封不动复制到右上角。这意味着在上半区的后半程赛程中，他们将迎战下半区的选手。`,
+                table: JSON.parse(JSON.stringify(table)),
+                highlights: [
+                    { rStart: m, rEnd: 2 * m - 1, cStart: 0, cEnd: m - 1, type: 'source' },
+                    { rStart: 0, rEnd: m - 1, cStart: m, cEnd: 2 * m - 1, type: 'target' }
+                ]
+            });
+
+            // 3. 右下角：复制左上角
+            for (let i = 0; i < m; i++) {
+                for (let j = 0; j < m; j++) {
+                    table[i + m][j + m] = table[i][j];
+                }
+            }
+            steps.push({
+                title: `规模扩展至 n=${m*2} (第3/3步)：内部赛程重放 (复制至右下角)`,
+                desc: `将左上角的矩阵块复制到右下角。下半区选手之间的内部对抗模式，与上半区的结构在数学上完全等价。`,
+                table: JSON.parse(JSON.stringify(table)),
+                highlights: [
+                    { rStart: 0, rEnd: m - 1, cStart: 0, cEnd: m - 1, type: 'source' },
+                    { rStart: m, rEnd: 2 * m - 1, cStart: m, cEnd: 2 * m - 1, type: 'target' }
+                ]
+            });
+
+            m *= 2;
+        }
+
+        steps.push({
+            title: "完成",
+            desc: `规模 ${n}x${n} 的日程表已成功构建！每一行代表对应选手的赛程，第 1 列是选手本身，后续列是他们在第 i 天的对手编号。`,
+            table: JSON.parse(JSON.stringify(table)),
+            highlights: []
+        });
+
+        return steps;
+    }
+
+    function App() {
+        const k = 3; // N=8
+        const n = Math.pow(2, k);
+        const steps = useMemo(() => generateAlgorithmSteps(k), [k]);
+        
+        const [currentStep, setCurrentStep] = useState(0);
+        const [isPlaying, setIsPlaying] = useState(false);
+        const canvasRef = useRef(null);
+
+        // 自动播放控制
+        useEffect(() => {
+            let timer;
+            if (isPlaying) {
+                timer = setTimeout(() => {
+                    if (currentStep < steps.length - 1) {
+                        setCurrentStep(prev => prev + 1);
+                    } else {
+                        setIsPlaying(false);
+                    }
+                }, 1500); // 1.5秒一步
+            }
+            return () => clearTimeout(timer);
+        }, [isPlaying, currentStep, steps.length]);
+
+        // Canvas 渲染逻辑
+        useEffect(() => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+
+            ctx.clearRect(0, 0, width, height);
+
+            const cellSize = Math.floor(width / (n + 1)); 
+            const offsetX = cellSize; 
+            const offsetY = cellSize;
+
+            const stepData = steps[currentStep];
+            const table = stepData.table;
+
+            // 1. 绘制高亮区域 (在网格线之前绘制)
+            stepData.highlights.forEach(hl => {
+                const x = offsetX + hl.cStart * cellSize;
+                const y = offsetY + hl.rStart * cellSize;
+                const w = (hl.cEnd - hl.cStart + 1) * cellSize;
+                const h = (hl.rEnd - hl.rStart + 1) * cellSize;
+
+                if (hl.type === 'source') {
+                    ctx.fillStyle = 'rgba(34, 197, 94, 0.2)'; // 绿色 (数据源)
+                    ctx.strokeStyle = 'rgb(34, 197, 94)';
+                } else {
+                    ctx.fillStyle = 'rgba(59, 130, 246, 0.2)'; // 蓝色 (目标区域)
+                    ctx.strokeStyle = 'rgb(59, 130, 246)';
+                }
+                
+                ctx.fillRect(x, y, w, h);
+                ctx.lineWidth = 3;
+                ctx.strokeRect(x, y, w, h);
+            });
+
+            // 2. 绘制表头 (列标题)
+            ctx.fillStyle = '#475569';
+            ctx.font = 'bold 14px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            ctx.fillText("选手", offsetX + cellSize/2, offsetY/2);
+            for(let j = 1; j < n; j++) {
+                ctx.fillText(`第${j}天`, offsetX + j*cellSize + cellSize/2, offsetY/2);
+            }
+
+            // 3. 绘制矩阵与网格
+            ctx.lineWidth = 1;
+            ctx.font = '16px monospace';
+            
+            for (let i = 0; i < n; i++) {
+                for (let j = 0; j < n; j++) {
+                    const val = table[i][j];
+                    const cx = offsetX + j * cellSize;
+                    const cy = offsetY + i * cellSize;
+
+                    // 绘制单元格边框
+                    ctx.strokeStyle = '#cbd5e1';
+                    ctx.strokeRect(cx, cy, cellSize, cellSize);
+
+                    // 绘制数字
+                    if (val > 0) {
+                        ctx.fillStyle = j === 0 ? '#0f172a' : '#334155';
+                        if(j === 0) ctx.font = 'bold 16px monospace';
+                        else ctx.font = '16px monospace';
+                        ctx.fillText(val.toString(), cx + cellSize/2, cy + cellSize/2);
+                    }
+                }
+            }
+
+        }, [currentStep, steps, n]);
+
+        const handleNext = () => setCurrentStep(p => Math.min(steps.length - 1, p + 1));
+        const handlePrev = () => setCurrentStep(p => Math.max(0, p - 1));
+        const handleReset = () => { setIsPlaying(false); setCurrentStep(0); };
+
+        return (
+            <div className="bg-white rounded-xl shadow-xl p-6 flex flex-col items-center border border-slate-200">
+                <div className="w-full mb-6">
+                    <h1 className="text-2xl font-bold text-slate-800 mb-2">循环赛日程表可视化 (n={n})</h1>
+                    <div className="flex gap-4 mb-4">
+                        <span className="flex items-center text-sm text-slate-600">
+                            <span className="w-4 h-4 bg-green-200 border-2 border-green-500 inline-block mr-2 rounded-sm"></span> 数据源区域
+                        </span>
+                        <span className="flex items-center text-sm text-slate-600">
+                            <span className="w-4 h-4 bg-blue-200 border-2 border-blue-500 inline-block mr-2 rounded-sm"></span> 复制目标区域
+                        </span>
+                    </div>
+                </div>
+
+                {/* 画布容器 */}
+                <div className="relative border bg-slate-50 border-slate-300 rounded-lg overflow-hidden shadow-inner">
+                    <canvas 
+                        ref={canvasRef} 
+                        width={600} 
+                        height={600} 
+                        className="max-w-full h-auto block"
+                    ></canvas>
+                </div>
+
+                {/* 控制面板 */}
+                <div className="w-full mt-8 bg-slate-100 p-4 rounded-lg border border-slate-200">
+                    <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+                        
+                        <div className="flex gap-2">
+                            <button 
+                                onClick={handlePrev} 
+                                disabled={currentStep === 0}
+                                className="px-4 py-2 bg-white border border-slate-300 rounded hover:bg-slate-50 disabled:opacity-50 text-slate-700 transition"
+                            >上一步</button>
+                            
+                            <button 
+                                onClick={handleNext} 
+                                disabled={currentStep === steps.length - 1}
+                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 transition"
+                            >单步执行 (下一步)</button>
+                            
+                            <button 
+                                onClick={() => setIsPlaying(!isPlaying)} 
+                                disabled={currentStep === steps.length - 1}
+                                className={`px-4 py-2 text-white rounded transition ${isPlaying ? 'bg-amber-500 hover:bg-amber-600' : 'bg-green-600 hover:bg-green-700'}`}
+                            >
+                                {isPlaying ? '暂停' : '自动播放'}
+                            </button>
+
+                            <button 
+                                onClick={handleReset} 
+                                className="px-4 py-2 bg-slate-200 text-slate-700 border border-slate-300 rounded hover:bg-slate-300 transition"
+                            >重置</button>
+                        </div>
+
+                        <div className="text-sm font-semibold text-slate-500">
+                            进度：{currentStep + 1} / {steps.length}
+                        </div>
+                    </div>
+
+                    <div className="mt-6 p-4 bg-white border border-blue-100 rounded text-slate-800 shadow-sm">
+                        <h3 className="font-bold text-lg mb-1 text-blue-800">{steps[currentStep].title}</h3>
+                        <p className="text-slate-600 leading-relaxed">{steps[currentStep].desc}</p>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+</script>
+
+</body>
+</html>

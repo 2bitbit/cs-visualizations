@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSAPP: 内存映射与缺页中断全流程可视化 - 完美版</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { 
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; 
+            background-color: #0f172a; /* Slate 900 */
+            color: #f8fafc;
+        }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7); /* Slate 800 with opacity */
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        /* 动态高亮特效 */
+        .glow-cpu { box-shadow: 0 0 25px rgba(56, 189, 248, 0.4); border-color: #38bdf8; }
+        .glow-mmu { box-shadow: 0 0 25px rgba(251, 146, 60, 0.4); border-color: #fb923c; }
+        .glow-os { box-shadow: 0 0 25px rgba(192, 132, 252, 0.4); border-color: #c084fc; }
+        .glow-memory { box-shadow: 0 0 25px rgba(52, 211, 153, 0.4); border-color: #34d399; }
+        .glow-error { box-shadow: 0 0 25px rgba(248, 113, 113, 0.5); border-color: #f87171; }
+
+        /* 强调行的微动画 */
+        .highlight-row {
+            background-color: rgba(250, 204, 21, 0.2) !important; /* Yellow tint */
+            transform: scale(1.02);
+            border-left: 4px solid #facc15 !important;
+            border-right: 4px solid #facc15 !important;
+            z-index: 10;
+            position: relative;
+        }
+
+        .transition-all { transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+        
+        /* 连线流动光效 */
+        @keyframes dash-flow {
+            to { stroke-dashoffset: -24; }
+        }
+        .path-flow {
+            stroke-dasharray: 12 12;
+            animation: dash-flow 0.8s linear infinite;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState } = React;
+
+        // CSAPP 规范的状态机数据
+        const stepsData = [
+            {
+                id: 0,
+                title: "初始状态",
+                desc: "程序就绪。虚拟地址空间已建立，但物理内存尚未分配（Demand Paging）。页表条目均为无效（Valid=0），TLB 为空。",
+                cpu: { inst: "等待调度...", va: "暂无", vpn: "-", vpo: "-" },
+                mmu: { state: "休眠中", pa: "-" },
+                tlb: [{ vpn: "-", ppn: "-", valid: 0 }],
+                pt: [
+                    { vpn: "0x4", ppn: "NULL", valid: 0, active: false },
+                    { vpn: "0x5", ppn: "NULL", valid: 0, active: false }
+                ],
+                ram: [
+                    { ppn: "0x8", pa: "0x8000", data: "空闲/未分配", active: false },
+                    { ppn: "0x8", pa: "0x8001", data: "空闲/未分配", active: false }
+                ],
+                os: { state: "监听中断" },
+                paths: [], activeNodes: []
+            },
+            {
+                id: 1,
+                title: "步骤 1: 访存指令触发，生成虚拟地址",
+                desc: "执行 `buffer[0] = 'A'`。CPU 核心发出虚拟地址 0x4000。硬件立即将其截断并拆分为两部分：虚拟页号 (VPN = 0x4) 和页内偏移 (VPO = 0x000)。",
+                cpu: { inst: "buffer[0] = 'A'", va: "0x4000", vpn: "0x4", vpo: "0x000" },
+                mmu: { state: "接收 VA，提取 VPN", pa: "-" },
+                tlb: [{ vpn: "-", ppn: "-", valid: 0 }],
+                pt: [{ vpn: "0x4", ppn: "NULL", valid: 0, active: false }, { vpn: "0x5", ppn: "NULL", valid: 0, active: false }],
+                ram: [{ ppn: "0x8", pa: "0x8000", data: "空闲/未分配", active: false }, { ppn: "0x8", pa: "0x8001", data: "空闲/未分配", active: false }],
+                os: { state: "监听中断" },
+                paths: [{ id: "cpu-mmu", color: "blue", pulse: true }],
+                activeNodes: ["cpu"]
+            },
+            {
+                id: 2,
+                title: "步骤 2: 硬件高速缓存 TLB 查找 (Miss)",
+                desc: "MMU 使用 VPN (0x4) 查询芯片内的 TLB。由于是首次访问，TLB 中没有关于 0x4 的缓存记录，发生 TLB Miss。必须去主存查询页表。",
+                cpu: { inst: "等待 MMU 地址转换", va: "0x4000", vpn: "0x4", vpo: "0x000" },
+                mmu: { state: "TLB 查找失败 (Miss)", pa: "-" },
+                tlb: [{ vpn: "-", ppn: "-", valid: 0 }],
+                pt: [{ vpn: "0x4", ppn: "NULL", valid: 0, active: false }, { vpn: "0x5", ppn: "NULL", valid: 0, active: false }],
+                ram: [{ ppn: "0x8", pa: "0x8000", data: "空闲/未分配", active: false }, { ppn: "0x8", pa: "0x8001", data: "空闲/未分配", active: false }],
+                os: { state: "监听中断" },
+                paths: [], activeNodes: ["mmu"]
+            },
+            {
+                id: 3,
+                title: "步骤 3: 硬件遍历页表 (Page Table Walk) 发现无效",
+                desc: "MMU 硬件通过页表基址寄存器 (PTBR) 访问主存中的页表，检索 VPN 0x4 的条目。发现有效位 (Valid) 为 0，这意味着该页存在于磁盘或尚未分配。",
+                cpu: { inst: "等待 MMU 地址转换", va: "0x4000", vpn: "0x4", vpo: "0x000" },
+                mmu: { state: "读取页表条目 (无效)", pa: "-" },
+                tlb: [{ vpn: "-", ppn: "-", valid: 0 }],
+                pt: [{ vpn: "0x4", ppn: "NULL", valid: 0, active: true }, { vpn: "0x5", ppn: "NULL", valid: 0, active: false }],
+                ram: [{ ppn: "0x8", pa: "0x8000", data: "空闲/未分配", active: false }, { ppn: "0x8", pa: "0x8001", data: "空闲/未分配", active: false }],
+                os: { state: "监听中断" },
+                paths: [{ id: "mmu-pt", color: "red", pulse: true }],
+                activeNodes: ["mmu", "pt"]
+            },
+            {
+                id: 4,
+                title: "步骤 4: 触发缺页中断 (Page Fault Exception)",
+                desc: "硬件流程无路可走！MMU 中止当前访存，向 CPU 发送异常信号。CPU 硬件保存当前上下文，并将执行流强行跳转到操作系统的缺页异常处理程序。",
+                cpu: { inst: "触发异常，保存现场", va: "0x4000", vpn: "0x4", vpo: "0x000" },
+                mmu: { state: "抛出 Page Fault 异常", pa: "-" },
+                tlb: [{ vpn: "-", ppn: "-", valid: 0 }],
+                pt: [{ vpn: "0x4", ppn: "NULL", valid: 0, active: true }, { vpn: "0x5", ppn: "NULL", valid: 0, active: false }],
+                ram: [{ ppn: "0x8", pa: "0x8000", data: "空闲/未分配", active: false }, { ppn: "0x8", pa: "0x8001", data: "空闲/未分配", active: false }],
+                os: { state: "接管 CPU，分析异常原因" },
+                paths: [{ id: "mmu-os", color: "red", pulse: true }],
+                activeNodes: ["os", "error"]
+            },
+            {
+                id: 5,
+                title: "步骤 5: 操作系统分配物理页框 (Demand Paging)",
+                desc: "OS 确认这是合法的堆内存访问。它在物理内存条上选取一个空闲的 4KB 页框 (PPN=0x8)，并将其清零。随后，OS 重写主存中的页表：填入 0x8，并将 Valid 置 1。",
+                cpu: { inst: "挂起等待", va: "0x4000", vpn: "0x4", vpo: "0x000" },
+                mmu: { state: "休眠中", pa: "-" },
+                tlb: [{ vpn: "-", ppn: "-", valid: 0 }],
+                pt: [{ vpn: "0x4", ppn: "0x8", valid: 1, active: true }, { vpn: "0x5", ppn: "NULL", valid: 0, active: false }],
+                ram: [{ ppn: "0x8", pa: "0x8000", data: "已分配, 全零数据", active: true }, { ppn: "0x8", pa: "0x8001", data: "已分配, 全零数据", active: true }],
+                os: { state: "分配内存，更新页表结构" },
+                paths: [{ id: "os-pt", color: "purple", pulse: true }, { id: "os-ram", color: "purple", pulse: true }],
+                activeNodes: ["os", "pt", "ram"]
+            },
+            {
+                id: 6,
+                title: "步骤 6: OS 返回用户态，指令重新执行",
+                desc: "缺页处理完毕，OS 执行 `iret` 返回指令。CPU 像什么都没发生一样，重新执行 `buffer[0] = 'A'`。这次 MMU 查页表发现有效，并将此映射 (VPN 0x4 -> PPN 0x8) 缓存在 TLB 中。",
+                cpu: { inst: "重新执行: buffer[0]='A'", va: "0x4000", vpn: "0x4", vpo: "0x000" },
+                mmu: { state: "页表 Hit，更新 TLB", pa: "-" },
+                tlb: [{ vpn: "0x4", ppn: "0x8", valid: 1 }],
+                pt: [{ vpn: "0x4", ppn: "0x8", valid: 1, active: false }, { vpn: "0x5", ppn: "NULL", valid: 0, active: false }],
+                ram: [{ ppn: "0x8", pa: "0x8000", data: "已分配, 全零数据", active: false }, { ppn: "0x8", pa: "0x8001", data: "已分配, 全零数据", active: false }],
+                os: { state: "监听中断" },
+                paths: [{ id: "os-cpu", color: "purple", pulse: true }, { id: "mmu-pt", color: "blue", pulse: true }],
+                activeNodes: ["cpu", "mmu"]
+            },
+            {
+                id: 7,
+                title: "步骤 7: 物理地址拼接与最终数据写入",
+                desc: "最关键的一步：MMU 将获得的 PPN (0x8) 与原始的 VPO (0x000) 进行物理拼接，生成最终的物理地址 PA = 0x8000。通过总线，字符 'A' 被真实地写入了物理内存芯片。",
+                cpu: { inst: "指令完成", va: "0x4000", vpn: "0x4", vpo: "0x000" },
+                mmu: { state: "生成 PA = [PPN 0x8 | VPO 0x000]", pa: "0x8000" },
+                tlb: [{ vpn: "0x4", ppn: "0x8", valid: 1 }],
+                pt: [{ vpn: "0x4", ppn: "0x8", valid: 1, active: false }, { vpn: "0x5", ppn: "NULL", valid: 0, active: false }],
+                ram: [{ ppn: "0x8", pa: "0x8000", data: "数值: 'A' (0x41)", active: true }, { ppn: "0x8", pa: "0x8001", data: "已分配, 全零数据", active: false }],
+                os: { state: "监听中断" },
+                paths: [{ id: "mmu-ram", color: "green", pulse: true }],
+                activeNodes: ["ram"]
+            },
+            {
+                id: 8,
+                title: "步骤 8: 局部性原理的极致提速 (TLB Hit)",
+                desc: "执行下一句 `buffer[1] = 'B'`。VA 变为 0x4001。由于还在同一个 4KB 页内，VPN 依然是 0x4。MMU 查询 TLB 直接命中！跳过了昂贵的查内存页表阶段，只需 1 个时钟周期即完成地址转换。",
+                cpu: { inst: "buffer[1] = 'B'", va: "0x4001", vpn: "0x4", vpo: "0x001" },
+                mmu: { state: "TLB 极速命中！", pa: "0x8001" },
+                tlb: [{ vpn: "0x4", ppn: "0x8", valid: 1 }],
+                pt: [{ vpn: "0x4", ppn: "0x8", valid: 1, active: false }, { vpn: "0x5", ppn: "NULL", valid: 0, active: false }],
+                ram: [{ ppn: "0x8", pa: "0x8000", data: "数值: 'A' (0x41)", active: false }, { ppn: "0x8", pa: "0x8001", data: "数值: 'B' (0x42)", active: true }],
+                os: { state: "监听中断" },
+                paths: [{ id: "cpu-mmu", color: "blue", pulse: true }, { id: "mmu-ram", color: "green", pulse: true }],
+                activeNodes: ["cpu", "mmu", "ram"]
+            }
+        ];
+
+        function App() {
+            const [currentStep, setCurrentStep] = useState(0);
+            const step = stepsData[currentStep];
+
+            const nextStep = () => { if (currentStep < stepsData.length - 1) setCurrentStep(currentStep + 1); };
+            const prevStep = () => { if (currentStep > 0) setCurrentStep(currentStep - 1); };
+            const reset = () => setCurrentStep(0);
+
+            // 动态边框逻辑
+            const getNodeClass = (nodeId) => {
+                if (step.activeNodes.includes("error") && (nodeId === 'mmu' || nodeId === 'os')) return "glow-error border-2";
+                if (!step.activeNodes.includes(nodeId)) return "border border-slate-600 opacity-80";
+                
+                if (nodeId === 'cpu') return "glow-cpu border-2";
+                if (nodeId === 'mmu') return "glow-mmu border-2";
+                if (nodeId === 'os') return "glow-os border-2";
+                if (nodeId === 'pt' || nodeId === 'ram') return "glow-memory border-2";
+                return "border-slate-600 border";
+            };
+
+            // 精准计算的 SVG 连线 (基于 1024x600 的相对内部坐标系)
+            const renderPath = (pathObj) => {
+                const strokeColors = { 
+                    blue: "#38bdf8", // Sky 400
+                    red: "#f87171",  // Red 400
+                    green: "#34d399",// Emerald 400
+                    purple: "#c084fc"// Purple 400
+                };
+                
+                // 严格锁定的贝塞尔曲线路径
+                const pathsDef = {
+                    "cpu-mmu": "M 276 130 C 310 130, 310 90, 350 90",
+                    "mmu-pt": "M 630 110 C 670 110, 670 140, 710 140",
+                    "mmu-os": "M 490 206 L 490 410",
+                    "os-pt": "M 630 450 C 680 450, 650 180, 710 180",
+                    "os-ram": "M 630 470 C 680 470, 650 440, 710 440",
+                    "mmu-ram": "M 630 160 C 680 160, 650 420, 710 420",
+                    "os-cpu": "M 350 460 C 200 460, 160 280, 160 240",
+                };
+
+                return (
+                    <g key={pathObj.id}>
+                        <path 
+                            d={pathsDef[pathObj.id]} 
+                            fill="none" 
+                            stroke={strokeColors[pathObj.color]} 
+                            strokeWidth="4" 
+                            strokeOpacity="0.2"
+                        />
+                        <path 
+                            d={pathsDef[pathObj.id]} 
+                            fill="none" 
+                            stroke={strokeColors[pathObj.color]} 
+                            strokeWidth="3" 
+                            markerEnd={`url(#arrow-${pathObj.color})`}
+                            className={pathObj.pulse ? "path-flow" : ""}
+                        />
+                    </g>
+                );
+            };
+
+            return (
+                <div className="w-[1060px] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[820px]">
+                    
+                    {/* 顶部控制面板 */}
+                    <div className="bg-slate-800 border-b border-slate-700 p-6 flex flex-col">
+                        <div className="flex justify-between items-start">
+                            <div className="flex-1 pr-6">
+                                <div className="flex items-center gap-3 mb-2">
+                                    <span className="bg-blue-600 text-white text-sm font-bold px-3 py-1 rounded-full shadow-lg border border-blue-400">
+                                        Step {currentStep} / 8
+                                    </span>
+                                    <h1 className="text-2xl font-bold text-white tracking-wide">{step.title}</h1>
+                                </div>
+                                <p className="text-slate-300 min-h-[48px] text-sm leading-relaxed">{step.desc}</p>
+                            </div>
+                            <div className="flex gap-3 shrink-0 mt-1">
+                                <button onClick={prevStep} disabled={currentStep === 0} className="px-4 py-2 bg-slate-700 text-white rounded-lg disabled:opacity-30 hover:bg-slate-600 font-medium transition-colors border border-slate-500 shadow-md">上一步</button>
+                                <button onClick={nextStep} disabled={currentStep === stepsData.length - 1} className="px-6 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-30 hover:bg-blue-500 font-bold shadow-[0_0_15px_rgba(37,99,235,0.5)] transition-all border border-blue-400">下一步</button>
+                                <button onClick={reset} className="px-4 py-2 bg-rose-900/50 text-rose-300 rounded-lg hover:bg-rose-800/60 hover:text-white font-medium transition-colors border border-rose-800">重置</button>
+                            </div>
+                        </div>
+                        {/* 进度条 */}
+                        <div className="w-full h-1.5 bg-slate-700 rounded-full mt-5 overflow-hidden">
+                            <div className="h-full bg-blue-500 transition-all duration-500 ease-out" style={{ width: `${(currentStep / (stepsData.length - 1)) * 100}%` }}></div>
+                        </div>
+                    </div>
+
+                    {/* 核心可视化沙盒体系 (架构拓扑绝对静止) */}
+                    <div className="relative w-full flex-1 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz48L3N2Zz4=')]">
+                        
+                        {/* SVG 连线层 */}
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
+                            <defs>
+                                <marker id="arrow-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#38bdf8"/></marker>
+                                <marker id="arrow-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#f87171"/></marker>
+                                <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#34d399"/></marker>
+                                <marker id="arrow-purple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#c084fc"/></marker>
+                            </defs>
+                            {step.paths.map(renderPath)}
+                        </svg>
+
+                        {/* ================= 组件区域 ================= */}
+
+                        {/* 1. CPU (左上) */}
+                        <div className={`absolute top-[60px] left-[36px] w-[240px] glass-panel rounded-xl shadow-xl p-4 z-10 transition-all ${getNodeClass('cpu')}`}>
+                            <div className="flex items-center gap-2 border-b border-slate-600 pb-2 mb-3">
+                                <div className="w-3 h-3 rounded-full bg-blue-400 shadow-[0_0_8px_#60a5fa]"></div>
+                                <h2 className="font-bold text-slate-100">CPU 核心 (Core 0)</h2>
+                            </div>
+                            
+                            <div className="bg-slate-900/60 p-2 rounded-lg border border-slate-700 mb-3">
+                                <div className="text-[10px] text-slate-400 uppercase tracking-wide">执行引擎</div>
+                                <div className="font-mono text-sm text-green-400 font-semibold mt-1">{step.cpu.inst}</div>
+                            </div>
+
+                            <div className="bg-blue-900/30 p-2.5 rounded-lg border border-blue-500/40">
+                                <div className="text-[10px] text-blue-300 uppercase tracking-wide mb-1">生成的虚拟地址 (VA)</div>
+                                <div className="font-mono text-lg text-white font-bold tracking-wider">{step.cpu.va}</div>
+                                
+                                {/* VA 拆分可视化 */}
+                                <div className="flex gap-1 mt-2">
+                                    <div className="flex-1 bg-blue-950/80 p-1 text-center rounded border border-blue-800">
+                                        <span className="text-[9px] block text-blue-400">VPN (虚拟页号)</span>
+                                        <span className="font-mono text-xs text-slate-200">{step.cpu.vpn}</span>
+                                    </div>
+                                    <div className="flex-[1.5] bg-slate-800 p-1 text-center rounded border border-slate-600">
+                                        <span className="text-[9px] block text-slate-400">VPO (页内偏移)</span>
+                                        <span className="font-mono text-xs text-slate-200">{step.cpu.vpo}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 2. MMU & TLB (中上) */}
+                        <div className={`absolute top-[40px] left-[350px] w-[280px] glass-panel rounded-xl shadow-xl p-4 z-10 transition-all ${getNodeClass('mmu')}`}>
+                            <div className="flex items-center gap-2 border-b border-slate-600 pb-2 mb-3">
+                                <div className="w-3 h-3 rounded-full bg-orange-400 shadow-[0_0_8px_#fb923c]"></div>
+                                <h2 className="font-bold text-slate-100">MMU 硬件 (内存管理单元)</h2>
+                            </div>
+                            
+                            <div className="bg-slate-900/60 px-3 py-2 rounded-lg border border-slate-700 text-center mb-3">
+                                <span className="text-orange-300 text-sm font-semibold">{step.mmu.state}</span>
+                            </div>
+
+                            {/* TLB 缓存阵列 */}
+                            <div className="border border-slate-600 rounded-lg overflow-hidden bg-slate-800 mb-3">
+                                <div className="bg-slate-700 text-slate-300 text-[10px] uppercase font-bold p-1.5 px-3 flex justify-between">
+                                    <span>TLB (Translation Lookaside Buffer)</span>
+                                    <span className="text-orange-400">SRAM</span>
+                                </div>
+                                <table className="w-full text-center text-xs">
+                                    <thead className="bg-slate-800 border-b border-slate-600 text-slate-400">
+                                        <tr><th className="p-1 font-medium">VPN</th><th className="p-1 font-medium border-l border-slate-600">PPN</th><th className="p-1 font-medium border-l border-slate-600">Valid</th></tr>
+                                    </thead>
+                                    <tbody className="bg-slate-900/50">
+                                        {step.tlb.map((entry, idx) => (
+                                            <tr key={idx} className={entry.valid ? 'text-emerald-400 font-bold bg-emerald-900/20' : 'text-slate-500'}>
+                                                <td className="p-1.5 font-mono">{entry.vpn}</td>
+                                                <td className="p-1.5 border-l border-slate-700 font-mono">{entry.ppn}</td>
+                                                <td className="p-1.5 border-l border-slate-700">{entry.valid}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {/* PA 拼接可视化 (展示最终地址) */}
+                            <div className="bg-emerald-900/20 p-2 rounded-lg border border-emerald-500/30 text-center">
+                                <div className="text-[10px] text-emerald-400 uppercase mb-1">计算出的物理地址 (PA)</div>
+                                <div className="font-mono text-sm text-white font-bold">{step.mmu.pa === '-' ? '等待转换...' : step.mmu.pa}</div>
+                            </div>
+                        </div>
+
+                        {/* 3. 操作系统内核 (中下) */}
+                        <div className={`absolute top-[410px] left-[350px] w-[280px] glass-panel rounded-xl shadow-xl p-4 z-10 transition-all ${getNodeClass('os')}`}>
+                            <div className="flex items-center gap-2 border-b border-purple-800/50 pb-2 mb-3">
+                                <div className="w-3 h-3 rounded-full bg-purple-400 shadow-[0_0_8px_#c084fc]"></div>
+                                <h2 className="font-bold text-slate-100">OS 内核 (Ring 0)</h2>
+                            </div>
+                            
+                            <div className="bg-purple-900/30 p-3 rounded-lg border border-purple-500/40 text-center mb-2">
+                                <span className="text-purple-300 font-bold">{step.os.state}</span>
+                            </div>
+                            
+                            <div className="bg-slate-900/50 p-2 rounded text-[11px] text-slate-400 leading-relaxed border border-slate-700">
+                                处理 Page Fault 中断，接管控制权。负责从物理内存条中划分空闲页框，修改主存页表映射关系，并在完成后通过 iret 指令交还控制权。
+                            </div>
+                        </div>
+
+                        {/* 4. 主存 RAM & Page Table (右侧) */}
+                        <div className={`absolute top-[40px] left-[710px] w-[310px] h-[520px] flex flex-col gap-4 z-10`}>
+                            
+                            {/* 页表模块 */}
+                            <div className={`flex-1 glass-panel rounded-xl shadow-xl p-3 flex flex-col transition-all ${getNodeClass('pt')}`}>
+                                <div className="flex items-center justify-between border-b border-slate-600 pb-2 mb-2">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-2.5 h-2.5 rounded-full bg-teal-400 shadow-[0_0_8px_#2dd4bf]"></div>
+                                        <h2 className="font-bold text-sm text-slate-100">主存: 多级页表 (PT)</h2>
+                                    </div>
+                                    <span className="text-[9px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">DRAM</span>
+                                </div>
+                                
+                                <div className="flex-1 overflow-hidden border border-slate-600 rounded-lg bg-slate-900">
+                                    <table className="w-full text-center text-[11px] border-collapse">
+                                        <thead className="bg-slate-800 border-b border-slate-600 text-slate-300">
+                                            <tr>
+                                                <th className="p-1.5 border-r border-slate-600 font-medium">VPN</th>
+                                                <th className="p-1.5 border-r border-slate-600 font-medium">PPN</th>
+                                                <th className="p-1.5 font-medium">Valid</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="text-slate-300">
+                                            {step.pt.map((entry, idx) => (
+                                                <tr key={idx} className={`border-b border-slate-700/50 transition-all ${entry.active ? 'highlight-row' : ''}`}>
+                                                    <td className="p-2 border-r border-slate-700/50 font-mono bg-slate-800/30">{entry.vpn}</td>
+                                                    <td className={`p-2 border-r border-slate-700/50 font-mono ${entry.ppn !== 'NULL' ? 'font-bold text-teal-400' : 'text-slate-600'}`}>{entry.ppn}</td>
+                                                    <td className={`p-2 font-bold ${entry.valid === 1 ? 'text-emerald-500' : 'text-rose-500/70'}`}>{entry.valid}</td>
+                                                </tr>
+                                            ))}
+                                            {/* Dummy row for realism */}
+                                            <tr className="text-slate-600 opacity-50"><td className="p-2 border-r border-slate-700/50 font-mono bg-slate-800/30">...</td><td className="p-2 border-r border-slate-700/50 font-mono">...</td><td className="p-2">0</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            {/* 物理内存 RAM 模块 */}
+                            <div className={`flex-[1.2] glass-panel rounded-xl shadow-xl p-3 flex flex-col transition-all ${getNodeClass('ram')}`}>
+                                <div className="flex items-center justify-between border-b border-slate-600 pb-2 mb-2">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]"></div>
+                                        <h2 className="font-bold text-sm text-slate-100">主存: 物理内存阵列 (RAM)</h2>
+                                    </div>
+                                    <span className="text-[9px] text-emerald-200/50 bg-emerald-900/30 border border-emerald-800/50 px-1.5 py-0.5 rounded">DDR5</span>
+                                </div>
+
+                                <div className="flex-1 overflow-hidden border border-slate-600 rounded-lg bg-slate-900">
+                                    <table className="w-full text-center text-xs border-collapse">
+                                        <thead className="bg-slate-800 border-b border-slate-600 text-slate-300">
+                                            <tr>
+                                                <th className="p-2 border-r border-slate-600 font-medium">物理地址 (PA)</th>
+                                                <th className="p-2 font-medium">1 字节存储单元</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="text-slate-300">
+                                            {step.ram.map((entry, idx) => (
+                                                <tr key={idx} className={`border-b border-slate-700/50 transition-all ${entry.active ? 'highlight-row' : ''}`}>
+                                                    <td className="p-2.5 border-r border-slate-700/50 font-mono bg-slate-800/30 text-emerald-100/70">{entry.pa}</td>
+                                                    <td className={`p-2.5 font-mono ${entry.data.includes('空闲') ? 'text-slate-600' : 'text-emerald-400 font-bold'}`}>{entry.data}</td>
+                                                </tr>
+                                            ))}
+                                            {/* Dummy rows */}
+                                            <tr className="text-slate-600 opacity-40"><td className="p-1 border-r border-slate-700/50 font-mono bg-slate-800/30">0x8002</td><td className="p-1 font-mono">...</td></tr>
+                                            <tr className="text-slate-600 opacity-20"><td className="p-1 border-r border-slate-700/50 font-mono bg-slate-800/30">0x8003</td><td className="p-1 font-mono">...</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                        </div>
+
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

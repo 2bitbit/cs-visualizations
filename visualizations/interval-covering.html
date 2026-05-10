@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>贪心算法：区间覆盖问题可视化</title>
+    <!-- 引入 React, ReactDOM 和 Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 自定义滚动条，保持界面整洁 */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans h-screen flex flex-col overflow-hidden">
+    <div id="root" class="h-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // --- 核心算法与状态生成 ---
+        function generateAlgorithmSteps() {
+            const target = { s: 1, e: 20 };
+            // 这是一个精心设计的复杂用例，包含完全重叠、最优解、冗余等情况
+            const rawIntervals = [
+                { id: 1, s: 0, e: 4 },
+                { id: 2, s: 1, e: 5 },
+                { id: 3, s: 2, e: 7 },
+                { id: 4, s: 6, e: 11 },
+                { id: 5, s: 8, e: 12 },
+                { id: 6, s: 10, e: 15 },
+                { id: 7, s: 11, e: 13 }, // 诱导项，完全被包含
+                { id: 8, s: 14, e: 18 },
+                { id: 9, s: 17, e: 21 }
+            ];
+            
+            // 步骤1：按左端点排序
+            const intervals = [...rawIntervals].sort((a, b) => a.s - b.s);
+            
+            let steps = [];
+            let currentStart = target.s;
+            let selectedIds = [];
+            let pointer = 0;
+
+            // 初始状态
+            steps.push({
+                currentStart,
+                candidates: [],
+                selectedIds: [...selectedIds],
+                bestId: null,
+                status: 'INIT',
+                log: `【初始状态】目标覆盖区间为 [${target.s}, ${target.e}]。初始化需要覆盖的左边界起点为 ${currentStart}。`
+            });
+
+            while (currentStart < target.e) {
+                // 寻找候选区间 (左端点 <= currentStart 且未被选中)
+                let candidates = [];
+                let tempPointer = 0; // 为演示直观，每次全局扫描符合条件的未使用区间
+                
+                while (tempPointer < intervals.length) {
+                    const inv = intervals[tempPointer];
+                    if (inv.s <= currentStart && !selectedIds.includes(inv.id) && inv.e > currentStart) {
+                        candidates.push(inv);
+                    }
+                    tempPointer++;
+                }
+
+                if (candidates.length === 0) {
+                    steps.push({
+                        currentStart,
+                        candidates: [],
+                        selectedIds: [...selectedIds],
+                        bestId: null,
+                        status: 'FAILED',
+                        log: `【发生错误】找不到左端点 <= ${currentStart} 的未使用区间。断层出现，覆盖失败！`
+                    });
+                    break;
+                }
+
+                // 记录寻找候选区间的状态
+                steps.push({
+                    currentStart,
+                    candidates: candidates.map(c => c.id),
+                    selectedIds: [...selectedIds],
+                    bestId: null,
+                    status: 'SEARCH',
+                    log: `【确立候选】在未选区间中，寻找所有左端点 <= ${currentStart.toFixed(1)} 的区间。找到 ${candidates.length} 个候选。`
+                });
+
+                // 在候选区间中做贪心选择 (寻找右端点最大者)
+                let best = candidates[0];
+                for (let i = 1; i < candidates.length; i++) {
+                    if (candidates[i].e > best.e) {
+                        best = candidates[i];
+                    }
+                }
+
+                selectedIds.push(best.id);
+                currentStart = best.e;
+
+                // 记录贪心选择的状态
+                steps.push({
+                    currentStart, // 此时指针已推进
+                    candidates: candidates.map(c => c.id),
+                    selectedIds: [...selectedIds],
+                    bestId: best.id,
+                    status: 'SELECT',
+                    log: `【贪心决策】在所有候选中，区间 [${best.s}, ${best.e}] 的右端点延伸最远（${best.e}）。选择该区间，并将所需覆盖边界推进至 ${currentStart.toFixed(1)}。`
+                });
+            }
+
+            if (currentStart >= target.e) {
+                steps.push({
+                    currentStart,
+                    candidates: [],
+                    selectedIds: [...selectedIds],
+                    bestId: null,
+                    status: 'DONE',
+                    log: `【执行完成】当前覆盖边界 ${currentStart.toFixed(1)} 已达到或超过目标右边界 ${target.e}。覆盖成功！总共使用了 ${selectedIds.length} 个区间。`
+                });
+            }
+
+            return { target, intervals, steps };
+        }
+
+        // Canvas 圆角矩形 Polyfill
+        function drawRoundRect(ctx, x, y, width, height, radius) {
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + width - radius, y);
+            ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+            ctx.lineTo(x + width, y + height - radius);
+            ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+            ctx.lineTo(x + radius, y + height);
+            ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+            ctx.lineTo(x, y + radius);
+            ctx.quadraticCurveTo(x, y, x + radius, y);
+            ctx.closePath();
+        }
+
+        const App = () => {
+            const { target, intervals, steps } = useMemo(() => generateAlgorithmSteps(), []);
+            const [stepIndex, setStepIndex] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+            
+            // 用于动画平滑移动游标
+            const [visualStart, setVisualStart] = useState(steps[0].currentStart);
+            const canvasRef = useRef(null);
+            const logContainerRef = useRef(null);
+
+            const currentStep = steps[stepIndex];
+
+            // 自动播放逻辑
+            useEffect(() => {
+                let timer;
+                if (isPlaying && stepIndex < steps.length - 1) {
+                    timer = setTimeout(() => {
+                        setStepIndex(prev => prev + 1);
+                    }, 1200);
+                } else if (isPlaying && stepIndex >= steps.length - 1) {
+                    setIsPlaying(false);
+                }
+                return () => clearTimeout(timer);
+            }, [isPlaying, stepIndex, steps.length]);
+
+            // 游标平滑动画逻辑
+            useEffect(() => {
+                let req;
+                const animate = () => {
+                    setVisualStart(prev => {
+                        const targetVal = steps[stepIndex].currentStart;
+                        const diff = targetVal - prev;
+                        if (Math.abs(diff) < 0.02) return targetVal;
+                        req = requestAnimationFrame(animate);
+                        return prev + diff * 0.15; // 缓动系数
+                    });
+                };
+                req = requestAnimationFrame(animate);
+                return () => cancelAnimationFrame(req);
+            }, [stepIndex, steps]);
+
+            // 滚动日志到底部
+            useEffect(() => {
+                if (logContainerRef.current) {
+                    logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+                }
+            }, [stepIndex]);
+
+            // Canvas 绘制核心逻辑
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                
+                // 处理高分屏清晰度
+                const dpr = window.devicePixelRatio || 1;
+                const rect = canvas.parentElement.getBoundingClientRect();
+                canvas.width = rect.width * dpr;
+                canvas.height = rect.height * dpr;
+                ctx.scale(dpr, dpr);
+                const width = rect.width;
+                const height = rect.height;
+
+                ctx.clearRect(0, 0, width, height);
+
+                // 坐标映射
+                const minX = -1;
+                const maxX = 22;
+                const paddingX = 40;
+                const usableWidth = width - paddingX * 2;
+                const getX = (val) => paddingX + ((val - minX) / (maxX - minX)) * usableWidth;
+
+                // 1. 绘制背景网格与坐标轴
+                ctx.strokeStyle = '#e2e8f0'; // gray-200
+                ctx.lineWidth = 1;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.font = '12px ui-sans-serif, system-ui, sans-serif';
+                ctx.fillStyle = '#64748b'; // slate-500
+
+                for (let i = minX; i <= maxX; i++) {
+                    const x = getX(i);
+                    ctx.beginPath();
+                    ctx.moveTo(x, 20);
+                    ctx.lineTo(x, height - 30);
+                    ctx.stroke();
+                    if (i % 2 === 0 || i === target.s || i === target.e) {
+                        ctx.fillText(i.toString(), x, height - 20);
+                    }
+                }
+
+                // 2. 绘制目标覆盖区间
+                const tx = getX(target.s);
+                const tw = getX(target.e) - tx;
+                ctx.fillStyle = '#eff6ff'; // blue-50
+                ctx.strokeStyle = '#3b82f6'; // blue-500
+                ctx.lineWidth = 2;
+                drawRoundRect(ctx, tx, 30, tw, 28, 6);
+                ctx.fill();
+                ctx.stroke();
+                
+                ctx.fillStyle = '#1e3a8a'; // blue-900
+                ctx.font = 'bold 14px ui-sans-serif, system-ui, sans-serif';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(`🎯 目标区间 [${target.s}, ${target.e}]`, tx + tw / 2, 44);
+
+                // 3. 绘制所有备选区间
+                const startY = 85;
+                const rowH = 34;
+
+                intervals.forEach((inv, index) => {
+                    const y = startY + index * rowH;
+                    const ix = getX(inv.s);
+                    const iw = Math.max(getX(inv.e) - ix, 4); // 保证最小宽度
+
+                    let bgColor = '#f8fafc'; // slate-50
+                    let borderColor = '#cbd5e1'; // slate-300
+                    let textColor = '#94a3b8'; // slate-400
+                    let label = `ID:${inv.id} [${inv.s}, ${inv.e}]`;
+
+                    if (currentStep.selectedIds.includes(inv.id)) {
+                        // 已选择
+                        bgColor = '#dcfce7'; // green-100
+                        borderColor = '#22c55e'; // green-500
+                        textColor = '#166534'; // green-800
+                        label += ' (已选)';
+                    } else if (currentStep.bestId === inv.id) {
+                        // 最优候选 (刚被选中，高亮闪烁态)
+                        bgColor = '#fef08a'; // yellow-200
+                        borderColor = '#eab308'; // yellow-500
+                        textColor = '#854d0e'; // yellow-800
+                        label += ' ⭐ 最优';
+                    } else if (currentStep.candidates.includes(inv.id)) {
+                        // 候选池中
+                        bgColor = '#fef9c3'; // yellow-100
+                        borderColor = '#facc15'; // yellow-400
+                        textColor = '#a16207'; // yellow-700
+                        label += ' (符合条件)';
+                    } else if (inv.e <= visualStart && !currentStep.selectedIds.includes(inv.id)) {
+                        // 已无用（被淘汰的）
+                        bgColor = '#f1f5f9';
+                        borderColor = '#e2e8f0';
+                        textColor = '#cbd5e1';
+                    } else {
+                        // 尚未考察
+                        textColor = '#475569';
+                        borderColor = '#94a3b8';
+                    }
+
+                    ctx.fillStyle = bgColor;
+                    ctx.strokeStyle = borderColor;
+                    ctx.lineWidth = 2;
+                    drawRoundRect(ctx, ix, y, iw, 24, 4);
+                    ctx.fill();
+                    ctx.stroke();
+
+                    ctx.fillStyle = textColor;
+                    ctx.font = '12px ui-sans-serif, system-ui, sans-serif';
+                    ctx.fillText(label, ix + iw / 2, y + 12);
+                });
+
+                // 4. 绘制覆盖游标 (Sweep Line)
+                const sweepX = getX(visualStart);
+                ctx.strokeStyle = '#ef4444'; // red-500
+                ctx.lineWidth = 2;
+                ctx.setLineDash([6, 4]);
+                ctx.beginPath();
+                ctx.moveTo(sweepX, 15);
+                ctx.lineTo(sweepX, height - 30);
+                ctx.stroke();
+                ctx.setLineDash([]); // 重置虚线
+
+                // 游标标签
+                ctx.fillStyle = '#ef4444';
+                ctx.font = 'bold 12px ui-sans-serif, system-ui, sans-serif';
+                ctx.fillText(`当前覆盖边界 (${visualStart.toFixed(1)})`, sweepX, 10);
+
+            }, [target, intervals, currentStep, visualStart]);
+
+            // 操作处理
+            const handleNext = () => { if(stepIndex < steps.length - 1) setStepIndex(s => s + 1); setIsPlaying(false); };
+            const handlePrev = () => { if(stepIndex > 0) setStepIndex(s => s - 1); setIsPlaying(false); };
+            const handleReset = () => { setStepIndex(0); setIsPlaying(false); };
+            const togglePlay = () => setIsPlaying(!isPlaying);
+
+            return (
+                <div className="max-w-7xl mx-auto w-full p-4 flex flex-col gap-4 h-full">
+                    {/* Header Controls */}
+                    <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex-shrink-0">
+                        <div>
+                            <h1 className="text-xl font-bold text-gray-800">贪心算法：区间覆盖问题</h1>
+                            <p className="text-sm text-gray-500 mt-1">单步演示环境，考察每一步的局部最优选择逻辑。</p>
+                        </div>
+                        <div className="flex gap-3">
+                            <button onClick={handlePrev} disabled={stepIndex === 0} 
+                                className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors">
+                                ⬅️ 上一步
+                            </button>
+                            <button onClick={handleNext} disabled={stepIndex === steps.length - 1}
+                                className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors">
+                                下一步 ➡️
+                            </button>
+                            <div className="w-px bg-gray-300 mx-1"></div>
+                            <button onClick={togglePlay} 
+                                className={`px-4 py-2 text-white rounded-lg transition-colors ${isPlaying ? 'bg-amber-500 hover:bg-amber-600' : 'bg-indigo-500 hover:bg-indigo-600'}`}>
+                                {isPlaying ? '⏸️ 暂停' : '▶️ 自动播放'}
+                            </button>
+                            <button onClick={handleReset}
+                                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
+                                🔄 重置
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Main Visual Canvas Container - 严格限制高度保持绝对布局不变 */}
+                    <div className="w-full h-[420px] bg-white rounded-xl shadow-sm border border-gray-100 relative flex-shrink-0">
+                        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block rounded-xl"></canvas>
+                    </div>
+
+                    {/* Bottom Info Grid */}
+                    <div className="grid grid-cols-2 gap-4 flex-grow min-h-0">
+                        {/* Data Table */}
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col h-full overflow-hidden">
+                            <div className="bg-gray-50 px-4 py-2 border-b border-gray-100 font-semibold text-gray-700 flex-shrink-0">
+                                排序后的区间数据与状态
+                            </div>
+                            <div className="overflow-y-auto custom-scrollbar flex-grow p-0">
+                                <table className="w-full text-sm text-left">
+                                    <thead className="text-xs text-gray-500 bg-gray-50 sticky top-0">
+                                        <tr>
+                                            <th className="px-4 py-3 border-b">ID</th>
+                                            <th className="px-4 py-3 border-b">区间 [s, e]</th>
+                                            <th className="px-4 py-3 border-b">当前状态</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {intervals.map((inv) => {
+                                            let statusText = "待定";
+                                            let rowClass = "border-b hover:bg-gray-50";
+                                            let badgeClass = "bg-gray-100 text-gray-600";
+
+                                            if (currentStep.selectedIds.includes(inv.id)) {
+                                                statusText = "已选择 (最优)";
+                                                rowClass = "border-b bg-green-50";
+                                                badgeClass = "bg-green-100 text-green-700 border border-green-200";
+                                            } else if (currentStep.bestId === inv.id) {
+                                                statusText = "即将被选";
+                                                rowClass = "border-b bg-yellow-50";
+                                                badgeClass = "bg-yellow-100 text-yellow-700 border border-yellow-200";
+                                            } else if (currentStep.candidates.includes(inv.id)) {
+                                                statusText = "候选池中";
+                                                badgeClass = "bg-yellow-50 text-yellow-600 border border-yellow-100";
+                                            } else if (inv.e <= currentStep.currentStart && !currentStep.selectedIds.includes(inv.id)) {
+                                                statusText = "已淘汰";
+                                                badgeClass = "bg-gray-100 text-gray-400";
+                                            }
+
+                                            return (
+                                                <tr key={inv.id} className={rowClass}>
+                                                    <td className="px-4 py-2 text-gray-500 font-mono">{inv.id}</td>
+                                                    <td className="px-4 py-2 font-mono font-medium">[{inv.s}, {inv.e}]</td>
+                                                    <td className="px-4 py-2">
+                                                        <span className={`px-2 py-1 text-xs rounded-md ${badgeClass}`}>
+                                                            {statusText}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        {/* Execution Logs */}
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col h-full overflow-hidden">
+                            <div className="bg-gray-50 px-4 py-2 border-b border-gray-100 flex justify-between items-center flex-shrink-0">
+                                <span className="font-semibold text-gray-700">算法执行日志 (第 {stepIndex + 1}/{steps.length} 步)</span>
+                            </div>
+                            <div ref={logContainerRef} className="overflow-y-auto custom-scrollbar flex-grow p-4 space-y-3">
+                                {steps.slice(0, stepIndex + 1).map((step, idx) => (
+                                    <div key={idx} className={`p-3 rounded-lg border ${idx === stepIndex ? 'border-blue-200 bg-blue-50 shadow-sm' : 'border-gray-100 bg-gray-50 opacity-60'}`}>
+                                        <div className="text-xs font-bold text-gray-400 mb-1">Step {idx}</div>
+                                        <div className="text-sm text-gray-700 leading-relaxed">
+                                            {step.log}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

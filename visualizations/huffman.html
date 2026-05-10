@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>贪心算法：哈夫曼编码可视化</title>
+    <!-- 引入 Tailwind CSS 进行现代 UI 布局 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 React 及 ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- 引入 Babel 编译 JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            height: 500px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            background-color: #f8fafc;
+            border-radius: 0.5rem;
+            box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06);
+        }
+        canvas {
+            display: block;
+            cursor: grab;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 p-6">
+    <div id="root" class="max-w-5xl mx-auto bg-white rounded-xl shadow-lg p-6"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // --- 核心算法：数据准备与步骤生成 ---
+        const initialLeaves = [
+            { char: 'F', freq: 5 },
+            { char: 'E', freq: 9 },
+            { char: 'C', freq: 12 },
+            { char: 'B', freq: 13 },
+            { char: 'D', freq: 16 },
+            { char: 'A', freq: 45 }
+        ];
+
+        // 预计算整个哈夫曼树的合并过程，生成每一步的快照
+        function generateHuffmanSteps(leaves) {
+            let nextId = 1;
+            // 为初始叶子节点分配 ID
+            let forest = leaves.map(l => ({ ...l, id: nextId++, isLeaf: true, displayChar: l.char }));
+            const nodesDict = {};
+            forest.forEach(n => nodesDict[n.id] = n);
+
+            const steps = [];
+            
+            // 辅助函数：获取某节点及其所有子节点的 ID 集合
+            const getIds = (node) => {
+                if (!node) return [];
+                return [node.id, ...getIds(node.left), ...getIds(node.right)];
+            };
+
+            // 第 0 步：初始状态
+            steps.push({
+                activeNodes: forest.map(n => n.id),
+                action: '初始状态：将所有字符转化为独立的叶子节点树。',
+                highlights: [],
+                forestState: forest.map(n => n.id)
+            });
+
+            while (forest.length > 1) {
+                // 贪心策略：按频率排序，取最小的两个
+                forest.sort((a, b) => a.freq - b.freq);
+                const left = forest.shift();
+                const right = forest.shift();
+
+                // 合并生成新节点
+                const parent = {
+                    char: left.char + right.char,
+                    displayChar: left.freq + right.freq, // 父节点显示频率和
+                    freq: left.freq + right.freq,
+                    left: left,
+                    right: right,
+                    id: nextId++,
+                    isLeaf: false
+                };
+                nodesDict[parent.id] = parent;
+                forest.push(parent);
+
+                // 收集当前活跃的所有节点 ID
+                let active = [];
+                forest.forEach(root => active.push(...getIds(root)));
+
+                steps.push({
+                    activeNodes: active,
+                    action: `贪心选择：合并频率最低的节点 [${left.displayChar}] 和 [${right.displayChar}]，生成频率为 ${parent.freq} 的新父节点。`,
+                    highlights: [left.id, right.id, parent.id],
+                    forestState: forest.map(n => n.id) // 当前处于森林根部的节点
+                });
+            }
+
+            const root = forest[0];
+            return { root, steps, nodesDict };
+        }
+
+        // --- React 组件 ---
+        function HuffmanVisualizer() {
+            const [stepIndex, setStepIndex] = useState(0);
+            const canvasRef = useRef(null);
+            
+            // 仅在初始化时计算一次树结构和步骤
+            const { root, steps, nodesDict, layout, codeMap } = useMemo(() => {
+                const { root, steps, nodesDict } = generateHuffmanSteps(initialLeaves);
+                
+                // 计算节点的 (x, y) 布局 (中序遍历确保 X 轴不重叠，深度决定 Y 轴)
+                const nodePositions = {};
+                let xIndex = 0;
+                const X_SPACING = 70;
+                const Y_SPACING = 80;
+                const Y_START = 60;
+                
+                const calculateLayout = (node, depth) => {
+                    if (!node) return;
+                    calculateLayout(node.left, depth + 1);
+                    nodePositions[node.id] = { 
+                        x: (xIndex + 1) * X_SPACING, 
+                        y: Y_START + depth * Y_SPACING,
+                        depth: depth
+                    };
+                    xIndex++;
+                    calculateLayout(node.right, depth + 1);
+                };
+                
+                calculateLayout(root, 0);
+                
+                // 动态计算画布所需的宽度
+                const canvasWidth = (xIndex + 2) * X_SPACING;
+                
+                // 生成最终的前缀码字典
+                const codeMap = {};
+                const generateCodes = (node, currentCode) => {
+                    if (!node) return;
+                    if (node.isLeaf) {
+                        codeMap[node.char] = currentCode;
+                    }
+                    generateCodes(node.left, currentCode + '0');
+                    generateCodes(node.right, currentCode + '1');
+                };
+                generateCodes(root, '');
+
+                return { root, steps, nodesDict, layout: { positions: nodePositions, width: canvasWidth }, codeMap };
+            }, []);
+
+            const currentStepData = steps[stepIndex];
+
+            // 绘制逻辑
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                const width = layout.width;
+                const height = 500;
+                
+                // 适配高清屏幕
+                const dpr = window.devicePixelRatio || 1;
+                canvas.width = width * dpr;
+                canvas.height = height * dpr;
+                canvas.style.width = `${width}px`;
+                canvas.style.height = `${height}px`;
+                ctx.scale(dpr, dpr);
+
+                // 清空画布
+                ctx.clearRect(0, 0, width, height);
+
+                const { activeNodes, highlights } = currentStepData;
+
+                // 1. 先绘制连线 (确保线在节点下层)
+                ctx.lineWidth = 2;
+                activeNodes.forEach(id => {
+                    const node = nodesDict[id];
+                    const pos = layout.positions[id];
+                    
+                    // 如果该节点在当前步骤是活跃的，并且它的左/右子节点也是活跃的，则连线
+                    if (node.left && activeNodes.includes(node.left.id)) {
+                        const leftPos = layout.positions[node.left.id];
+                        ctx.beginPath();
+                        ctx.moveTo(pos.x, pos.y);
+                        ctx.lineTo(leftPos.x, leftPos.y);
+                        ctx.strokeStyle = highlights.includes(id) && highlights.includes(node.left.id) ? '#f59e0b' : '#cbd5e1';
+                        ctx.stroke();
+                        
+                        // 绘制路径权值 '0'
+                        ctx.fillStyle = '#64748b';
+                        ctx.font = '14px Arial';
+                        ctx.fillText('0', (pos.x + leftPos.x)/2 - 15, (pos.y + leftPos.y)/2);
+                    }
+                    
+                    if (node.right && activeNodes.includes(node.right.id)) {
+                        const rightPos = layout.positions[node.right.id];
+                        ctx.beginPath();
+                        ctx.moveTo(pos.x, pos.y);
+                        ctx.lineTo(rightPos.x, rightPos.y);
+                        ctx.strokeStyle = highlights.includes(id) && highlights.includes(node.right.id) ? '#f59e0b' : '#cbd5e1';
+                        ctx.stroke();
+
+                        // 绘制路径权值 '1'
+                        ctx.fillStyle = '#64748b';
+                        ctx.font = '14px Arial';
+                        ctx.fillText('1', (pos.x + rightPos.x)/2 + 5, (pos.y + rightPos.y)/2);
+                    }
+                });
+
+                // 2. 绘制节点
+                activeNodes.forEach(id => {
+                    const node = nodesDict[id];
+                    const pos = layout.positions[id];
+                    const isHighlighted = highlights.includes(id);
+
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, 20, 0, 2 * Math.PI);
+                    
+                    // 节点颜色配置
+                    if (isHighlighted) {
+                        ctx.fillStyle = '#fef3c7'; // 琥珀色高亮
+                        ctx.strokeStyle = '#d97706';
+                    } else if (node.isLeaf) {
+                        ctx.fillStyle = '#e0f2fe'; // 浅蓝色叶子
+                        ctx.strokeStyle = '#0284c7';
+                    } else {
+                        ctx.fillStyle = '#ffffff'; // 白色内部节点
+                        ctx.strokeStyle = '#64748b';
+                    }
+                    
+                    ctx.fill();
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+
+                    // 绘制节点内文字 (频率)
+                    ctx.fillStyle = isHighlighted ? '#b45309' : '#0f172a';
+                    ctx.font = 'bold 14px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(node.freq.toString(), pos.x, pos.y);
+
+                    // 如果是叶子节点，在下方标注字符
+                    if (node.isLeaf) {
+                        ctx.fillStyle = '#334155';
+                        ctx.font = '16px monospace';
+                        ctx.fillText(node.char, pos.x, pos.y + 35);
+                    }
+                });
+
+            }, [stepIndex, layout, currentStepData, nodesDict]);
+
+            return (
+                <div className="flex flex-col gap-6">
+                    <div className="flex justify-between items-center border-b pb-4">
+                        <h1 className="text-2xl font-bold text-slate-800">哈夫曼编码生成过程演示</h1>
+                        <div className="flex items-center gap-4">
+                            <button 
+                                onClick={() => setStepIndex(Math.max(0, stepIndex - 1))}
+                                disabled={stepIndex === 0}
+                                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded transition"
+                            >
+                                上一步
+                            </button>
+                            <span className="text-slate-600 font-medium">步骤 {stepIndex} / {steps.length - 1}</span>
+                            <button 
+                                onClick={() => setStepIndex(Math.min(steps.length - 1, stepIndex + 1))}
+                                disabled={stepIndex === steps.length - 1}
+                                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded shadow transition"
+                            >
+                                下一步
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="bg-blue-50 border-l-4 border-blue-500 p-4 text-blue-800 font-medium rounded-r">
+                        <strong>当前动作：</strong> {currentStepData.action}
+                    </div>
+
+                    <div className="canvas-container">
+                        <canvas ref={canvasRef}></canvas>
+                    </div>
+
+                    {/* 结果展示区，仅在最后一步显示完整编码映射 */}
+                    {stepIndex === steps.length - 1 && (
+                        <div className="mt-4 p-4 bg-green-50 rounded-lg border border-green-200">
+                            <h3 className="text-lg font-bold text-green-800 mb-3">最终前缀码字典</h3>
+                            <div className="flex flex-wrap gap-4">
+                                {Object.entries(codeMap).sort((a,b) => a[1].length - b[1].length).map(([char, code]) => (
+                                    <div key={char} className="bg-white px-3 py-2 rounded shadow-sm border border-green-100 flex items-center gap-2">
+                                        <span className="font-bold text-slate-700">{char}</span>
+                                        <span className="text-green-600 font-mono tracking-wider">{code}</span>
+                                        <span className="text-xs text-slate-400">({code.length} bits)</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const rootElement = document.getElementById('root');
+        const root = ReactDOM.createRoot(rootElement);
+        root.render(<HuffmanVisualizer />);
+    </script>
+</body>
+</html>

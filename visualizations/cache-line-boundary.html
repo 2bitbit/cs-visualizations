@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>跨缓存行读取可视化 (Cache Line Boundary Crossing)</title>
+    <!-- Tailwind CSS for robust layout and styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { 
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background-color: #0f172a; 
+            color: #f8fafc;
+            margin: 0; 
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        /* Grid background pattern for tech feel */
+        .tech-bg {
+            background-image: 
+                linear-gradient(rgba(51, 65, 85, 0.3) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(51, 65, 85, 0.3) 1px, transparent 1px);
+            background-size: 30px 30px;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: auto;
+            max-width: 800px;
+            background-color: #1e293b;
+            border-radius: 0.75rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            border: 1px solid #334155;
+        }
+        .custom-scroll::-webkit-scrollbar { width: 6px; }
+        .custom-scroll::-webkit-scrollbar-track { background: #1e293b; border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+    </style>
+</head>
+<body class="tech-bg">
+    <div id="root" class="w-full h-full p-4 md:p-8 flex justify-center items-center"></div>
+
+    <script type="text/babel" data-type="module">
+        const { useState, useEffect, useRef } = React;
+
+        const STEPS_UNALIGNED = [
+            { 
+                title: "1. 初始状态：未对齐的内存", 
+                desc: "有一个 8 字节的 Target 变量存放在内存中。糟糕的是，它的起始地址是 60。\n\n由于 CPU 按 64 字节的「缓存行」管理内存，这个变量不幸地被腰斩：前 4 个字节落在 Cache Line 1 (0-63)，后 4 个字节落在 Cache Line 2 (64-127)。" 
+            },
+            { 
+                title: "2. 第一次内存提取 (Fetch Line 1)", 
+                desc: "CPU 执行指令读取该变量。地址解码器发现目标地址 60 属于 Cache Line 1。\n\nCPU 通过内存总线发出请求，将包含这 64 字节的整块 Cache Line 1 缓慢加载到 L1 数据缓存中。此时，只拿到了变量的一半。" 
+            },
+            { 
+                title: "3. 第二次内存提取 (Fetch Line 2)", 
+                desc: "CPU 发现变量的读取尚未完成（还差 4 字节）。它被迫计算出剩余数据所在的地址 64，这属于 Cache Line 2。\n\n于是，CPU 再次发起昂贵的内存总线请求，将 Cache Line 2 加载到 L1 缓存的另一个槽位。性能在这里被直接砍半！" 
+            },
+            { 
+                title: "4. 数据拼接与组装", 
+                desc: "现在两个缓存行都在 L1 中了。CPU 硬件的载入单元需要从槽位 1 提取尾部的 4 字节，从槽位 2 提取头部的 4 字节，然后将它们拼接到目标寄存器中。\n\n如果在这两次读取的间隙，另一个核心修改了 Line 2 的数据，就会发生毁灭性的「撕裂读 (Torn Read)」。" 
+            }
+        ];
+
+        const STEPS_ALIGNED = [
+            { 
+                title: "1. 初始状态：内存对齐", 
+                desc: "经过编译器优化或手动 Padding（例如 C++ 的 alignas 或结构体填充），Target 变量被放置在地址 64 处（8 的整数倍）。\n\n现在，它完完整整地位于 Cache Line 2 的内部，没有跨越任何危险的物理边界。" 
+            },
+            { 
+                title: "2. 单次内存提取", 
+                desc: "CPU 需要读取该变量。地址解码器确定完整的数据完全位于 Cache Line 2 之中。\n\n只需要发出一次总线请求，Cache Line 2 被顺利加载进 L1 缓存。" 
+            },
+            { 
+                title: "3. 直接读取，一步到位", 
+                desc: "数据已在 L1 缓存就绪。由于没有跨行，CPU 可以一次性、原子地将完整的 8 个字节提取到寄存器中。\n\n极低的延迟，极致的带宽利用率，绝无「撕裂读」的风险。这就是底层系统编程追求对齐的原因。" 
+            }
+        ];
+
+        const LAYOUT = {
+            memY: 460, memH: 80,
+            cacheY: 260, cacheH: 70,
+            cpuY: 60, cpuH: 60,
+            
+            // Memory static slots
+            memLine1: { x: 80, w: 300 },
+            memLine2: { x: 420, w: 300 },
+            
+            // Cache static slots
+            cacheSlot1: { x: 180, w: 200 },
+            cacheSlot2: { x: 420, w: 200 },
+            
+            // CPU Register
+            reg: { x: 340, w: 120 }
+        };
+
+        // Pre-calculated bounding boxes for animation interpolation
+        // Format: { x, y, w, h }
+        const BOXES = {
+            unaligned: {
+                line1_mem: { x: LAYOUT.memLine1.x, y: LAYOUT.memY, w: LAYOUT.memLine1.w, h: LAYOUT.memH },
+                line2_mem: { x: LAYOUT.memLine2.x, y: LAYOUT.memY, w: LAYOUT.memLine2.w, h: LAYOUT.memH },
+                line1_cache: { x: LAYOUT.cacheSlot1.x, y: LAYOUT.cacheY, w: LAYOUT.cacheSlot1.w, h: LAYOUT.cacheH },
+                line2_cache: { x: LAYOUT.cacheSlot2.x, y: LAYOUT.cacheY, w: LAYOUT.cacheSlot2.w, h: LAYOUT.cacheH },
+                
+                // Data part 1 (Offset 60, width represents 4 bytes)
+                data1_mem: { x: 360, y: LAYOUT.memY, w: 20, h: LAYOUT.memH },
+                data1_cache: { x: 366, y: LAYOUT.cacheY, w: 14, h: LAYOUT.cacheH },
+                data1_reg: { x: 340, y: LAYOUT.cpuY, w: 60, h: LAYOUT.cpuH },
+                
+                // Data part 2 (Offset 64, width represents 4 bytes)
+                data2_mem: { x: 420, y: LAYOUT.memY, w: 20, h: LAYOUT.memH },
+                data2_cache: { x: 420, y: LAYOUT.cacheY, w: 14, h: LAYOUT.cacheH },
+                data2_reg: { x: 400, y: LAYOUT.cpuY, w: 60, h: LAYOUT.cpuH },
+            },
+            aligned: {
+                line2_mem: { x: LAYOUT.memLine2.x, y: LAYOUT.memY, w: LAYOUT.memLine2.w, h: LAYOUT.memH },
+                line2_cache: { x: LAYOUT.cacheSlot2.x, y: LAYOUT.cacheY, w: LAYOUT.cacheSlot2.w, h: LAYOUT.cacheH },
+                
+                // Data Full (Offset 64, width represents 8 bytes)
+                data_mem: { x: 420, y: LAYOUT.memY, w: 40, h: LAYOUT.memH },
+                data_cache: { x: 420, y: LAYOUT.cacheY, w: 28, h: LAYOUT.cacheH },
+                data_reg: { x: LAYOUT.reg.x, y: LAYOUT.cpuY, w: LAYOUT.reg.w, h: LAYOUT.cpuH },
+            }
+        };
+
+        // Colors
+        const THEME = {
+            bg: '#1e293b',
+            cpuBg: '#0f172a', cpuBorder: '#64748b',
+            line1: { bg: 'rgba(56, 189, 248, 0.2)', border: '#38bdf8', text: '#bae6fd' }, // Blue
+            line2: { bg: 'rgba(52, 211, 153, 0.2)', border: '#34d399', text: '#a7f3d0' }, // Green
+            data: { bg: 'rgba(249, 115, 22, 0.8)', border: '#ea580c', text: '#ffffff' },  // Orange
+            textMuted: '#94a3b8'
+        };
+
+        const drawRoundedRect = (ctx, x, y, w, h, r, bg, border, lineWidth = 2) => {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.arcTo(x + w, y, x + w, y + h, r);
+            ctx.arcTo(x + w, y + h, x, y + h, r);
+            ctx.arcTo(x, y + h, x, y, r);
+            ctx.arcTo(x, y, x + w, y, r);
+            ctx.closePath();
+            if (bg) { ctx.fillStyle = bg; ctx.fill(); }
+            if (border) { ctx.strokeStyle = border; ctx.lineWidth = lineWidth; ctx.stroke(); }
+        };
+
+        const drawCenteredText = (ctx, text, x, y, w, h, font, color) => {
+            ctx.font = font;
+            ctx.fillStyle = color;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, x + w / 2, y + h / 2);
+        };
+
+        const drawArrow = (ctx, x1, y1, x2, y2, color) => {
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            // Arrow head
+            const angle = Math.atan2(y2 - y1, x2 - x1);
+            ctx.beginPath();
+            ctx.moveTo(x2, y2);
+            ctx.lineTo(x2 - 10 * Math.cos(angle - Math.PI / 6), y2 - 10 * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(x2 - 10 * Math.cos(angle + Math.PI / 6), y2 - 10 * Math.sin(angle + Math.PI / 6));
+            ctx.closePath();
+            ctx.fillStyle = color;
+            ctx.fill();
+        };
+
+        const lerp = (start, end, t) => start + (end - start) * t;
+        const lerpBox = (b1, b2, t) => ({
+            x: lerp(b1.x, b2.x, t), y: lerp(b1.y, b2.y, t),
+            w: lerp(b1.w, b2.w, t), h: lerp(b1.h, b2.h, t)
+        });
+
+        const renderScene = (ctx, mode, step, progress) => {
+            ctx.clearRect(0, 0, 800, 600);
+
+            // 1. Draw Static Background Structures
+            // CPU Outline
+            drawRoundedRect(ctx, 200, 20, 400, 120, 8, THEME.cpuBg, THEME.cpuBorder);
+            drawCenteredText(ctx, "CPU Core", 200, 20, 400, 30, "bold 16px sans-serif", "#f8fafc");
+            drawRoundedRect(ctx, LAYOUT.reg.x, LAYOUT.cpuY, LAYOUT.reg.w, LAYOUT.cpuH, 4, null, THEME.cpuBorder, 1);
+            drawCenteredText(ctx, "Register", LAYOUT.reg.x, LAYOUT.cpuY - 20, LAYOUT.reg.w, 20, "12px sans-serif", THEME.textMuted);
+
+            // L1 Cache Outline
+            drawRoundedRect(ctx, 160, 220, 480, 130, 8, THEME.cpuBg, THEME.cpuBorder);
+            drawCenteredText(ctx, "L1 Data Cache", 160, 220, 480, 30, "bold 16px sans-serif", "#f8fafc");
+            drawRoundedRect(ctx, LAYOUT.cacheSlot1.x, LAYOUT.cacheY, LAYOUT.cacheSlot1.w, LAYOUT.cacheH, 4, null, '#334155', 1);
+            drawRoundedRect(ctx, LAYOUT.cacheSlot2.x, LAYOUT.cacheY, LAYOUT.cacheSlot2.w, LAYOUT.cacheH, 4, null, '#334155', 1);
+            drawCenteredText(ctx, "Slot 1", LAYOUT.cacheSlot1.x, LAYOUT.cacheY + LAYOUT.cacheH, LAYOUT.cacheSlot1.w, 20, "12px sans-serif", THEME.textMuted);
+            drawCenteredText(ctx, "Slot 2", LAYOUT.cacheSlot2.x, LAYOUT.cacheY + LAYOUT.cacheH, LAYOUT.cacheSlot2.w, 20, "12px sans-serif", THEME.textMuted);
+
+            // Main Memory Outline
+            drawCenteredText(ctx, "Main Memory (RAM)", 0, 420, 800, 30, "bold 16px sans-serif", "#f8fafc");
+            
+            // Draw Bus lines
+            drawArrow(ctx, 400, 420, 400, 360, THEME.cpuBorder);
+            drawCenteredText(ctx, "Memory Bus", 410, 380, 80, 20, "12px sans-serif", THEME.textMuted);
+            drawArrow(ctx, 400, 210, 400, 150, THEME.cpuBorder);
+
+            // Helper to draw the animated block
+            const drawDataBlock = (box, style, label) => {
+                drawRoundedRect(ctx, box.x, box.y, box.w, box.h, 4, style.bg, style.border);
+                if (box.w > 30) { // Only draw text if wide enough
+                    drawCenteredText(ctx, label, box.x, box.y, box.w, box.h, "14px sans-serif", style.text);
+                }
+            };
+
+            const B = BOXES[mode];
+
+            // Memory Static Base Boundaries (Always visible faintly to show where they belong)
+            drawRoundedRect(ctx, B.line1_mem?.x || LAYOUT.memLine1.x, LAYOUT.memY, LAYOUT.memLine1.w, LAYOUT.memH, 4, null, '#334155', 2);
+            drawRoundedRect(ctx, LAYOUT.memLine2.x, LAYOUT.memY, LAYOUT.memLine2.w, LAYOUT.memH, 4, null, '#334155', 2);
+            // Draw Byte boundary marker
+            ctx.beginPath(); ctx.moveTo(400, LAYOUT.memY - 10); ctx.lineTo(400, LAYOUT.memY + LAYOUT.memH + 10);
+            ctx.strokeStyle = '#ef4444'; ctx.setLineDash([5, 5]); ctx.stroke(); ctx.setLineDash([]);
+            drawCenteredText(ctx, "Byte 64 边界", 350, LAYOUT.memY - 30, 100, 20, "bold 12px sans-serif", "#ef4444");
+
+            // 2. Dynamic Drawing Logic based on State and Progress
+            if (mode === 'unaligned') {
+                // Line 1 Logic
+                let bLine1 = B.line1_mem;
+                let bData1 = B.data1_mem;
+                if (step === 1) {
+                    bLine1 = lerpBox(B.line1_mem, B.line1_cache, progress);
+                    bData1 = lerpBox(B.data1_mem, B.data1_cache, progress);
+                } else if (step > 1) {
+                    bLine1 = B.line1_cache;
+                    if (step === 3) {
+                        bData1 = lerpBox(B.data1_cache, B.data1_reg, progress);
+                    } else {
+                        bData1 = B.data1_cache;
+                    }
+                }
+
+                // Line 2 Logic
+                let bLine2 = B.line2_mem;
+                let bData2 = B.data2_mem;
+                if (step === 2) {
+                    bLine2 = lerpBox(B.line2_mem, B.line2_cache, progress);
+                    bData2 = lerpBox(B.data2_mem, B.data2_cache, progress);
+                } else if (step > 2) {
+                    bLine2 = B.line2_cache;
+                    if (step === 3) {
+                        bData2 = lerpBox(B.data2_cache, B.data2_reg, progress);
+                    } else {
+                        bData2 = B.data2_cache;
+                    }
+                }
+
+                // Draw shapes
+                drawDataBlock(bLine1, THEME.line1, "Cache Line 1 (Bytes 0-63)");
+                drawDataBlock(bLine2, THEME.line2, "Cache Line 2 (Bytes 64-127)");
+                
+                // Draw target data pieces ON TOP
+                drawDataBlock(bData1, THEME.data, "Target");
+                drawDataBlock(bData2, THEME.data, "");
+                
+                // Address markers if in memory
+                if (step === 0) {
+                    drawCenteredText(ctx, "addr 60", B.data1_mem.x, B.data1_mem.y + B.data1_mem.h + 10, 40, 20, "12px monospace", THEME.textMuted);
+                }
+
+            } else {
+                // Aligned Mode Logic
+                let bLine2 = B.line2_mem;
+                let bData = B.data_mem;
+
+                if (step === 1) {
+                    bLine2 = lerpBox(B.line2_mem, B.line2_cache, progress);
+                    bData = lerpBox(B.data_mem, B.data_cache, progress);
+                } else if (step > 1) {
+                    bLine2 = B.line2_cache;
+                    if (step === 2) {
+                        bData = lerpBox(B.data_cache, B.data_reg, progress);
+                    } else {
+                        bData = B.data_cache;
+                    }
+                }
+
+                // Draw shapes
+                drawDataBlock(bLine2, THEME.line2, "Cache Line 2 (Bytes 64-127)");
+                drawDataBlock(bData, THEME.data, "Target (8B)");
+                
+                // Address marker
+                if (step === 0) {
+                    drawCenteredText(ctx, "addr 64", B.data_mem.x, B.data_mem.y + B.data_mem.h + 10, 40, 20, "12px monospace", THEME.textMuted);
+                }
+            }
+        };
+
+        const App = () => {
+            const [mode, setMode] = useState('unaligned'); // 'unaligned' | 'aligned'
+            const [step, setStep] = useState(0);
+            
+            const canvasRef = useRef(null);
+            const stepRef = useRef(step);
+            const modeRef = useRef(mode);
+            const reqRef = useRef();
+
+            const steps = mode === 'unaligned' ? STEPS_UNALIGNED : STEPS_ALIGNED;
+
+            // Sync refs for animation loop
+            useEffect(() => {
+                stepRef.current = step;
+                modeRef.current = mode;
+            }, [step, mode]);
+
+            // Animation engine using pure Canvas and requestAnimationFrame
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                let startTime = null;
+                const duration = 600; // ms
+
+                const animate = (timestamp) => {
+                    if (!startTime) startTime = timestamp;
+                    const elapsed = timestamp - startTime;
+                    let p = Math.min(elapsed / duration, 1);
+                    
+                    // Ease out cubic
+                    const easeP = 1 - Math.pow(1 - p, 3);
+                    
+                    renderScene(ctx, modeRef.current, stepRef.current, easeP);
+
+                    if (p < 1) {
+                        reqRef.current = requestAnimationFrame(animate);
+                    }
+                };
+
+                // Cancel previous animation and start new
+                if (reqRef.current) cancelAnimationFrame(reqRef.current);
+                reqRef.current = requestAnimationFrame(animate);
+
+                return () => cancelAnimationFrame(reqRef.current);
+            }, [step, mode]);
+
+            // Handlers
+            const handleNext = () => setStep(s => Math.min(s + 1, steps.length - 1));
+            const handlePrev = () => setStep(s => Math.max(s - 1, 0));
+            const handleReset = () => setStep(0);
+            
+            const toggleMode = (newMode) => {
+                setMode(newMode);
+                setStep(0);
+            };
+
+            return (
+                <div className="w-full max-w-6xl mx-auto flex flex-col lg:flex-row gap-6 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl">
+                    
+                    {/* Left: Canvas Area */}
+                    <div className="flex-1 flex flex-col gap-4">
+                        <div className="flex justify-between items-center px-2">
+                            <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">
+                                内存架构物理引擎
+                            </h2>
+                            <div className="flex gap-2 bg-slate-800 p-1 rounded-lg">
+                                <button 
+                                    className={`px-4 py-1.5 text-sm font-semibold rounded-md transition-all ${mode === 'unaligned' ? 'bg-orange-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+                                    onClick={() => toggleMode('unaligned')}
+                                >
+                                    ⚠️ 跨行灾难演示
+                                </button>
+                                <button 
+                                    className={`px-4 py-1.5 text-sm font-semibold rounded-md transition-all ${mode === 'aligned' ? 'bg-emerald-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+                                    onClick={() => toggleMode('aligned')}
+                                >
+                                    ✅ 最佳对齐演示
+                                </button>
+                            </div>
+                        </div>
+                        
+                        {/* Canvas Element strictly mapping physics */}
+                        <div className="w-full bg-slate-800/50 rounded-xl p-4 overflow-hidden relative border border-slate-700/50 flex justify-center">
+                            <canvas 
+                                ref={canvasRef} 
+                                width="800" 
+                                height="600" 
+                                className="w-full max-w-full h-auto bg-transparent border-none shadow-none"
+                            ></canvas>
+                        </div>
+                    </div>
+
+                    {/* Right: Controls & Text Area */}
+                    <div className="w-full lg:w-80 xl:w-96 flex flex-col gap-4">
+                        <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 flex flex-col h-full shadow-inner">
+                            
+                            {/* Step Indicator */}
+                            <div className="flex gap-1 mb-6">
+                                {steps.map((_, i) => (
+                                    <div key={i} className={`h-1.5 flex-1 rounded-full transition-colors duration-300 ${i <= step ? (mode === 'unaligned' ? 'bg-orange-500' : 'bg-emerald-500') : 'bg-slate-600'}`}></div>
+                                ))}
+                            </div>
+
+                            {/* Narrative Content */}
+                            <div className="flex-1 custom-scroll overflow-y-auto pr-2 mb-6">
+                                <h3 className={`text-xl font-bold mb-4 ${mode === 'unaligned' ? 'text-orange-400' : 'text-emerald-400'}`}>
+                                    {steps[step].title}
+                                </h3>
+                                <p className="text-slate-300 leading-relaxed whitespace-pre-line text-[15px]">
+                                    {steps[step].desc}
+                                </p>
+                            </div>
+
+                            {/* Control Buttons */}
+                            <div className="flex flex-col gap-3 mt-auto">
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={handlePrev} 
+                                        disabled={step === 0}
+                                        className="flex-1 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:hover:bg-slate-700 text-white font-medium py-2.5 rounded-lg transition-colors flex justify-center items-center gap-2"
+                                    >
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                                        上一步
+                                    </button>
+                                    <button 
+                                        onClick={handleNext} 
+                                        disabled={step === steps.length - 1}
+                                        className={`flex-1 font-semibold py-2.5 rounded-lg transition-all shadow-lg flex justify-center items-center gap-2 disabled:opacity-50 ${mode === 'unaligned' ? 'bg-orange-600 hover:bg-orange-500 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'}`}
+                                    >
+                                        下一步
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                                    </button>
+                                </div>
+                                <button 
+                                    onClick={handleReset}
+                                    className="w-full bg-slate-900/50 hover:bg-slate-900 text-slate-400 hover:text-slate-300 border border-slate-700 py-2 rounded-lg text-sm transition-colors"
+                                >
+                                    ↺ 重新演示当前模式
+                                </button>
+                            </div>
+
+                        </div>
+                    </div>
+
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

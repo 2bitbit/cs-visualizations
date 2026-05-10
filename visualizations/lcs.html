@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>最长公共子序列 (LCS) 动态规划可视化</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background-color: #f3f4f6; }
+    canvas { background-color: #ffffff; border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useMemo } = React;
+
+    // 预计算所有的 DP 步骤以便于单步执行
+    function generateSteps(word1, word2) {
+      const steps = [];
+      const m = word1.length;
+      const n = word2.length;
+      
+      // 初始化 DP 矩阵 (深拷贝以便记录每一步)
+      let currentDP = Array(m + 1).fill(0).map(() => Array(n + 1).fill(0));
+      
+      // 步骤0：初始状态
+      steps.push({
+        type: 'init',
+        dp: currentDP.map(row => [...row]),
+        desc: '初始化边界条件：当任一字符串长度为0时，LCS长度为0。即第一行和第一列全部填 0。',
+        highlights: [],
+        i: 0, j: 0
+      });
+
+      // 阶段 1：填表
+      for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+          const char1 = word1[i - 1];
+          const char2 = word2[j - 1];
+          let val = 0;
+          let highlights = [];
+          let desc = '';
+
+          if (char1 === char2) {
+            val = currentDP[i - 1][j - 1] + 1;
+            desc = `【字符匹配】 X[${i-1}] '${char1}' == Y[${j-1}] '${char2}'。
+转移方程：dp[${i}][${j}] = dp[${i - 1}][${j - 1}] + 1 = ${val}`;
+            highlights = [
+              { r: i - 1, c: j - 1, color: 'rgba(34, 197, 94, 0.4)' }, // 绿色依赖
+              { r: i, c: j, color: 'rgba(234, 179, 8, 0.5)' }          // 黄色当前
+            ];
+          } else {
+            const upVal = currentDP[i - 1][j];
+            const leftVal = currentDP[i][j - 1];
+            val = Math.max(upVal, leftVal);
+            desc = `【字符不匹配】 X[${i-1}] '${char1}' != Y[${j-1}] '${char2}'。
+转移方程：dp[${i}][${j}] = max(dp[${i - 1}][${j}], dp[${i}][${j - 1}]) 
+         = max(${upVal}, ${leftVal}) = ${val}`;
+            highlights = [
+              { r: i - 1, c: j, color: 'rgba(56, 182, 255, 0.4)' }, // 蓝色依赖(上)
+              { r: i, c: j - 1, color: 'rgba(56, 182, 255, 0.4)' }, // 蓝色依赖(左)
+              { r: i, c: j, color: 'rgba(234, 179, 8, 0.5)' }        // 黄色当前
+            ];
+          }
+
+          currentDP[i][j] = val;
+          steps.push({
+            type: 'fill',
+            dp: currentDP.map(row => [...row]),
+            desc: desc,
+            highlights: highlights,
+            i, j
+          });
+        }
+      }
+
+      // 阶段 2：回溯寻找路径
+      let i = m;
+      let j = n;
+      let path = [];
+      let lcsString = "";
+
+      while (i > 0 && j > 0) {
+        path.push({ r: i, c: j });
+        let desc = '';
+        let nextI = i;
+        let nextJ = j;
+        let isMatch = false;
+
+        if (word1[i - 1] === word2[j - 1]) {
+          desc = `【回溯】 dp[${i}][${j}] 字符 '${word1[i - 1]}' 匹配，加入结果并向左上(对角线)移动。`;
+          isMatch = true;
+          lcsString = word1[i - 1] + lcsString;
+          nextI = i - 1;
+          nextJ = j - 1;
+        } else if (currentDP[i - 1][j] > currentDP[i][j - 1]) {
+          desc = `【回溯】 dp[${i}][${j}] 字符不匹配，且上方值(${currentDP[i - 1][j]}) > 左侧值(${currentDP[i][j - 1]})，只能向上移动。`;
+          nextI = i - 1;
+        } else if (currentDP[i - 1][j] < currentDP[i][j - 1]) {
+          desc = `【回溯】 dp[${i}][${j}] 字符不匹配，且上方值(${currentDP[i - 1][j]}) < 左侧值(${currentDP[i][j - 1]})，只能向左移动。`;
+          nextJ = j - 1;
+        } else {
+          // 这里是解答疑问的核心更新
+          desc = `【回溯分支点】 dp[${i}][${j}] 字符不匹配。
+注意：上方值(${currentDP[i - 1][j]}) == 左侧值(${currentDP[i][j - 1]})！
+这意味着存在多条合法的回溯路径（向上或向左皆可，最终LCS长度一致）。
+当前算法实现默认约定优先向左移动。`;
+          nextJ = j - 1;
+        }
+
+        steps.push({
+          type: 'backtrack',
+          dp: currentDP.map(row => [...row]),
+          desc: desc + `\n当前找到的子序列: "${lcsString}"`,
+          highlights: path.map(p => ({ r: p.r, c: p.c, color: 'rgba(168, 85, 247, 0.5)' })), // 紫色回溯路径
+          i, j,
+          matchChar: isMatch ? word1[i - 1] : null
+        });
+
+        i = nextI;
+        j = nextJ;
+      }
+      
+      steps.push({
+        type: 'finish',
+        dp: currentDP.map(row => [...row]),
+        desc: `【完成】 回溯结束。最长公共子序列为: "${lcsString}"，长度为: ${currentDP[m][n]}。`,
+        highlights: path.map(p => ({ r: p.r, c: p.c, color: 'rgba(168, 85, 247, 0.6)' })),
+        i: 0, j: 0
+      });
+
+      return steps;
+    }
+
+    const App = () => {
+      // 默认提供一个经典且复杂的例子
+      const [word1, setWord1] = useState('ALGORITHM');
+      const [word2, setWord2] = useState('LOGARITHM');
+      const [stepIndex, setStepIndex] = useState(0);
+      const [isPlaying, setIsPlaying] = useState(false);
+      
+      const canvasRef = useRef(null);
+
+      // 每次输入改变，重新计算所有步骤
+      const steps = useMemo(() => generateSteps(word1, word2), [word1, word2]);
+
+      // 播放控制
+      useEffect(() => {
+        let timer;
+        if (isPlaying && stepIndex < steps.length - 1) {
+          // 在回溯阶段放慢速度
+          const currentStepType = steps[stepIndex].type;
+          const delay = currentStepType === 'backtrack' ? 800 : 100;
+          
+          timer = setTimeout(() => {
+            setStepIndex(prev => prev + 1);
+          }, delay);
+        } else if (stepIndex >= steps.length - 1) {
+          setIsPlaying(false);
+        }
+        return () => clearTimeout(timer);
+      }, [isPlaying, stepIndex, steps.length]);
+
+      // Canvas 绘制逻辑
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const currentStep = steps[stepIndex];
+        const m = word1.length;
+        const n = word2.length;
+
+        // 设置高清画布 (处理高 DPI 屏幕)
+        const dpr = window.devicePixelRatio || 1;
+        // 计算需要的画布大小
+        const cellSize = 45;
+        const offsetX = 60;
+        const offsetY = 60;
+        const width = offsetX + (n + 1) * cellSize + 20;
+        const height = offsetY + (m + 1) * cellSize + 20;
+
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        ctx.scale(dpr, dpr);
+
+        // 清空画布
+        ctx.clearRect(0, 0, width, height);
+
+        // 绘制表头 (字符串)
+        ctx.font = 'bold 18px monospace';
+        ctx.fillStyle = '#374151';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // 绘制 Word2 (顶侧)
+        for (let j = 1; j <= n; j++) {
+          ctx.fillText(word2[j - 1], offsetX + j * cellSize + cellSize / 2, offsetY - 20);
+        }
+        // 绘制 Word1 (左侧)
+        for (let i = 1; i <= m; i++) {
+          ctx.fillText(word1[i - 1], offsetX - 20, offsetY + i * cellSize + cellSize / 2);
+        }
+
+        // 绘制高亮背景
+        if (currentStep.highlights) {
+          currentStep.highlights.forEach(h => {
+            ctx.fillStyle = h.color;
+            ctx.fillRect(offsetX + h.c * cellSize, offsetY + h.r * cellSize, cellSize, cellSize);
+          });
+        }
+
+        // 绘制网格和数字
+        ctx.strokeStyle = '#d1d5db';
+        ctx.lineWidth = 1;
+        ctx.font = '16px monospace';
+
+        for (let i = 0; i <= m; i++) {
+          for (let j = 0; j <= n; j++) {
+            const x = offsetX + j * cellSize;
+            const y = offsetY + i * cellSize;
+
+            // 绘制网格边框
+            ctx.strokeRect(x, y, cellSize, cellSize);
+
+            // 绘制 DP 数组的值
+            const val = currentStep.dp[i][j];
+            // 只绘制已经计算过的值（包括 0 行 0 列）
+            // 判断当前单元格是否应该显示数字（如果还在填表中，后面的全是0，我们隐藏尚未触及的0）
+            let shouldDraw = false;
+            if (currentStep.type === 'init' || currentStep.type === 'backtrack' || currentStep.type === 'finish') {
+                shouldDraw = true;
+            } else if (i < currentStep.i) {
+                shouldDraw = true; // 之前的行
+            } else if (i === currentStep.i && j <= currentStep.j) {
+                shouldDraw = true; // 当前行及之前计算过的列
+            }
+
+            // 对于第一行第一列始终显示 0
+            if (i === 0 || j === 0) shouldDraw = true;
+
+            if (shouldDraw) {
+              // 当前正在操作的单元格字体加粗
+              if (currentStep.type === 'fill' && i === currentStep.i && j === currentStep.j) {
+                ctx.font = 'bold 20px monospace';
+                ctx.fillStyle = '#b45309'; // 深黄色
+              } else if (currentStep.type === 'backtrack' && currentStep.highlights.some(h => h.r === i && h.c === j)) {
+                ctx.font = 'bold 20px monospace';
+                ctx.fillStyle = '#581c87'; // 深紫色
+              } else {
+                ctx.font = '16px monospace';
+                ctx.fillStyle = '#4b5563';
+              }
+              ctx.fillText(val.toString(), x + cellSize / 2, y + cellSize / 2);
+            }
+          }
+        }
+
+        // 绘制状态指示器/指针
+        if (currentStep.type === 'fill') {
+          ctx.strokeStyle = '#ef4444'; // 红色框表示当前关注的计算点
+          ctx.lineWidth = 3;
+          ctx.strokeRect(offsetX + currentStep.j * cellSize, offsetY + currentStep.i * cellSize, cellSize, cellSize);
+        }
+
+      }, [stepIndex, steps, word1, word2]);
+
+      const handleReset = () => {
+        setIsPlaying(false);
+        setStepIndex(0);
+      };
+
+      const handleSkipToBacktrack = () => {
+        setIsPlaying(false);
+        const backTrackIdx = steps.findIndex(s => s.type === 'backtrack');
+        if(backTrackIdx !== -1) {
+            setStepIndex(backTrackIdx);
+        } else {
+            setStepIndex(steps.length - 1);
+        }
+      }
+
+      return (
+        <div className="max-w-6xl mx-auto p-6 flex flex-col gap-6">
+          <header className="text-center">
+            <h1 className="text-3xl font-bold text-gray-800 mb-2">LCS 动态规划核心逻辑演示</h1>
+            <p className="text-gray-600">在二维表中寻找字符串 X 和 Y 的最长公共子序列</p>
+          </header>
+
+          <div className="flex flex-col lg:flex-row gap-6 items-start">
+            
+            {/* 左侧控制与信息面板 */}
+            <div className="w-full lg:w-1/3 bg-white rounded-xl shadow-md p-6 flex flex-col gap-4">
+              
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-semibold text-gray-700">字符串 X (左侧轴):</label>
+                <input 
+                  type="text" 
+                  value={word1} 
+                  onChange={(e) => {setWord1(e.target.value.toUpperCase()); handleReset();}}
+                  className="px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 uppercase font-mono"
+                  maxLength="12"
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-semibold text-gray-700">字符串 Y (顶部轴):</label>
+                <input 
+                  type="text" 
+                  value={word2} 
+                  onChange={(e) => {setWord2(e.target.value.toUpperCase()); handleReset();}}
+                  className="px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 uppercase font-mono"
+                  maxLength="12"
+                />
+              </div>
+
+              <hr className="my-2 border-gray-200" />
+
+              <div className="flex flex-wrap gap-2 justify-center">
+                <button 
+                  onClick={() => setIsPlaying(!isPlaying)} 
+                  className={`px-4 py-2 text-white rounded-md font-semibold ${isPlaying ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'} transition-colors`}
+                >
+                  {isPlaying ? '暂停 (Pause)' : '自动播放 (Play)'}
+                </button>
+                <button 
+                  onClick={() => setStepIndex(prev => Math.max(0, prev - 1))}
+                  disabled={stepIndex === 0 || isPlaying}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md font-semibold hover:bg-gray-300 disabled:opacity-50 transition-colors"
+                >
+                  上一步
+                </button>
+                <button 
+                  onClick={() => setStepIndex(prev => Math.min(steps.length - 1, prev + 1))}
+                  disabled={stepIndex === steps.length - 1 || isPlaying}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md font-semibold hover:bg-gray-300 disabled:opacity-50 transition-colors"
+                >
+                  下一步
+                </button>
+                <button 
+                  onClick={handleReset}
+                  className="px-4 py-2 bg-red-100 text-red-700 rounded-md font-semibold hover:bg-red-200 transition-colors w-full mt-2"
+                >
+                  重置回到起点
+                </button>
+                <button 
+                  onClick={handleSkipToBacktrack}
+                  disabled={isPlaying}
+                  className="px-4 py-2 border border-purple-500 text-purple-700 rounded-md font-semibold hover:bg-purple-50 transition-colors w-full"
+                >
+                  跳过填表，直接看回溯
+                </button>
+              </div>
+
+              <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                <h3 className="text-sm font-bold text-gray-800 mb-2">
+                  进度: {stepIndex + 1} / {steps.length} 
+                  <span className="ml-2 text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">
+                    {steps[stepIndex]?.type.toUpperCase()}
+                  </span>
+                </h3>
+                <div className="text-sm text-gray-700 font-mono whitespace-pre-wrap leading-relaxed min-h-[100px]">
+                  {steps[stepIndex]?.desc}
+                </div>
+              </div>
+
+            </div>
+
+            {/* 右侧 Canvas 可视化面板 */}
+            <div className="w-full lg:w-2/3 flex justify-center items-center overflow-auto bg-gray-200 p-4 rounded-xl min-h-[500px]">
+               <canvas ref={canvasRef} className="max-w-full block"></canvas>
+            </div>
+
+          </div>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

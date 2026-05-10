@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图的m着色问题回溯算法演示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        canvas { background-color: #f8fafc; border-radius: 0.5rem; box-shadow: inset 0 2px 4px 0 rgb(0 0 0 / 0.05); }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-8">
+    <div class="max-w-6xl mx-auto bg-white rounded-xl shadow-lg p-6">
+        <div class="text-center mb-6">
+            <h1 class="text-3xl font-bold text-gray-800">图的 m 着色问题 —— 回溯算法可视化</h1>
+            <p class="text-gray-500 mt-2">图中有 6 个节点，颜色数 m = 3。本例将演示局部有效选择如何导致全局冲突并触发回溯。</p>
+        </div>
+
+        <div class="flex flex-col md:flex-row gap-6">
+            <!-- Canvas 区域 -->
+            <div class="w-full md:w-2/3 border border-gray-200 rounded-lg p-2">
+                <canvas id="graphCanvas" width="700" height="500" class="w-full h-auto"></canvas>
+            </div>
+
+            <!-- 控制与状态区域 -->
+            <div class="w-full md:w-1/3 flex flex-col gap-4">
+                <!-- 调色板说明 -->
+                <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                    <h3 class="font-semibold text-gray-700 mb-2">可用颜色 (m=3):</h3>
+                    <div class="flex gap-4">
+                        <div class="flex items-center"><span class="w-4 h-4 rounded-full inline-block mr-2" style="background-color: #ef4444;"></span>颜色 1</div>
+                        <div class="flex items-center"><span class="w-4 h-4 rounded-full inline-block mr-2" style="background-color: #3b82f6;"></span>颜色 2</div>
+                        <div class="flex items-center"><span class="w-4 h-4 rounded-full inline-block mr-2" style="background-color: #10b981;"></span>颜色 3</div>
+                    </div>
+                </div>
+
+                <!-- 控制按钮 -->
+                <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                    <div class="flex justify-between items-center mb-4">
+                        <button id="btnPrev" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded disabled:opacity-50">上一步</button>
+                        <button id="btnPlay" class="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded shadow">自动播放</button>
+                        <button id="btnNext" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded disabled:opacity-50">下一步</button>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm text-gray-600">
+                        <span>播放速度:</span>
+                        <input type="range" id="speedRange" min="200" max="2000" value="800" class="flex-1" style="direction: rtl;">
+                    </div>
+                </div>
+
+                <!-- 状态与日志 -->
+                <div class="bg-gray-900 text-green-400 p-4 rounded-lg shadow-inner flex-1 overflow-y-auto" style="max-height: 250px;">
+                    <div class="flex justify-between mb-2 border-b border-gray-700 pb-2">
+                        <span class="font-mono text-sm text-gray-300">当前步数: <span id="stepCounter" class="text-white">0 / 0</span></span>
+                        <span class="font-mono text-sm text-gray-300">解向量 X = <span id="stateVector" class="text-white">[-,-,-,-,-,-]</span></span>
+                    </div>
+                    <p id="stepDescription" class="font-mono text-sm leading-relaxed"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 定义颜色系统
+        const COLORS = ["#cbd5e1", "#ef4444", "#3b82f6", "#10b981"]; // 0:未着色, 1:红, 2:蓝, 3:绿
+        const COLOR_NAMES = ["未分配", "颜色 1 (红)", "颜色 2 (蓝)", "颜色 3 (绿)"];
+
+        // 定义图结构与布局
+        const graph = {
+            nodes: [0, 1, 2, 3, 4, 5],
+            edges: [
+                [0, 1], [0, 2], [0, 3],
+                [1, 3],
+                [2, 4], [2, 5],
+                [3, 5],
+                [4, 5]
+            ],
+            // 预设优美的坐标布局
+            positions: [
+                {x: 350, y: 80},  // 0
+                {x: 550, y: 150}, // 1
+                {x: 150, y: 220}, // 2
+                {x: 450, y: 280}, // 3
+                {x: 250, y: 400}, // 4
+                {x: 450, y: 420}  // 5
+            ]
+        };
+
+        const m = 3; // 颜色总数
+
+        // 预生成所有回溯步骤
+        let steps = [];
+        function generateBacktrackingSteps() {
+            let n = graph.nodes.length;
+            let colors = new Array(n).fill(0);
+            
+            // 建立邻接表
+            let adj = Array.from({length: n}, () => []);
+            for (let [u, v] of graph.edges) {
+                adj[u].push(v);
+                adj[v].push(u);
+            }
+
+            function isSafe(node, c) {
+                for (let neighbor of adj[node]) {
+                    if (colors[neighbor] === c) return neighbor;
+                }
+                return -1;
+            }
+
+            function backtrack(node) {
+                if (node === n) {
+                    steps.push({ type: 'success', colors: [...colors], msg: '成功找到所有节点的着色方案！' });
+                    return true;
+                }
+
+                steps.push({ type: 'visit', node: node, colors: [...colors], msg: `开始处理节点 ${node}。` });
+
+                for (let c = 1; c <= m; c++) {
+                    steps.push({ type: 'try', node: node, color: c, colors: [...colors], msg: `尝试为节点 ${node} 分配 ${COLOR_NAMES[c]}。` });
+
+                    let conflictNode = isSafe(node, c);
+                    if (conflictNode === -1) {
+                        colors[node] = c;
+                        steps.push({ type: 'assign', node: node, color: c, colors: [...colors], msg: `分配有效，暂定节点 ${node} 为 ${COLOR_NAMES[c]}。` });
+
+                        if (backtrack(node + 1)) return true;
+
+                        colors[node] = 0; // 回溯
+                        steps.push({ type: 'backtrack', node: node, colors: [...colors], msg: `后续节点无解，发生回溯！撤销节点 ${node} 的颜色。` });
+                    } else {
+                        steps.push({ type: 'conflict', node: node, color: c, conflictNode: conflictNode, colors: [...colors], msg: `冲突！节点 ${node} 的颜色与相邻节点 ${conflictNode} 相同。` });
+                    }
+                }
+                steps.push({ type: 'exhausted', node: node, colors: [...colors], msg: `节点 ${node} 尝试了所有 ${m} 种颜色均失败，必须退回上一个节点。` });
+                return false;
+            }
+
+            // 存入初始状态
+            steps.push({ type: 'start', colors: [...colors], msg: '算法开始，准备遍历状态空间树。' });
+            backtrack(0);
+        }
+
+        generateBacktrackingSteps();
+
+        // 渲染与控制逻辑
+        const canvas = document.getElementById('graphCanvas');
+        const ctx = canvas.getContext('2d');
+        let currentStepIndex = 0;
+        let isPlaying = false;
+        let playInterval = null;
+
+        function drawGraph(step) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 绘制边
+            graph.edges.forEach(([u, v]) => {
+                const posU = graph.positions[u];
+                const posV = graph.positions[v];
+                
+                ctx.beginPath();
+                ctx.moveTo(posU.x, posU.y);
+                ctx.lineTo(posV.x, posV.y);
+                
+                // 冲突高亮处理
+                if (step.type === 'conflict' && ((u === step.node && v === step.conflictNode) || (v === step.node && u === step.conflictNode))) {
+                    ctx.strokeStyle = '#ef4444'; // 红色粗线表示冲突
+                    ctx.lineWidth = 4;
+                    ctx.setLineDash([5, 5]);
+                } else {
+                    ctx.strokeStyle = '#94a3b8';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([]);
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
+            });
+
+            // 绘制节点
+            graph.nodes.forEach(node => {
+                const pos = graph.positions[node];
+                let colorCode = COLORS[step.colors[node]];
+                let strokeColor = '#475569';
+                let lineWidth = 2;
+                let dash = [];
+
+                // 正在尝试的颜色表现
+                if (step.type === 'try' && step.node === node) {
+                    colorCode = COLORS[step.color];
+                    strokeColor = '#f59e0b'; // 橙色边框表示尝试中
+                    lineWidth = 4;
+                    dash = [4, 4];
+                } else if ((step.type === 'visit' || step.type === 'exhausted' || step.type === 'backtrack') && step.node === node) {
+                    strokeColor = '#f59e0b';
+                    lineWidth = 4;
+                } else if (step.type === 'conflict' && step.node === node) {
+                    colorCode = COLORS[step.color];
+                    strokeColor = '#ef4444';
+                    lineWidth = 5;
+                }
+
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 25, 0, 2 * Math.PI);
+                ctx.fillStyle = colorCode;
+                ctx.fill();
+                
+                ctx.setLineDash(dash);
+                ctx.lineWidth = lineWidth;
+                ctx.strokeStyle = strokeColor;
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // 节点编号
+                ctx.fillStyle = (step.colors[node] === 0 && !(step.type === 'try' && step.node === node)) ? '#334155' : '#ffffff';
+                if(step.type === 'try' && step.node === node) ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 20px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(node, pos.x, pos.y);
+            });
+        }
+
+        function updateUI() {
+            const step = steps[currentStepIndex];
+            drawGraph(step);
+
+            // 更新文本面板
+            document.getElementById('stepCounter').innerText = `${currentStepIndex} / ${steps.length - 1}`;
+            document.getElementById('stepDescription').innerText = `> ${step.msg}`;
+            
+            let vectorStr = step.colors.map(c => c === 0 ? '-' : c).join(', ');
+            document.getElementById('stateVector').innerText = `[${vectorStr}]`;
+
+            // 更新按钮状态
+            document.getElementById('btnPrev').disabled = currentStepIndex === 0;
+            document.getElementById('btnNext').disabled = currentStepIndex === steps.length - 1;
+        }
+
+        function nextStep() {
+            if (currentStepIndex < steps.length - 1) {
+                currentStepIndex++;
+                updateUI();
+            } else {
+                pauseAutoPlay();
+            }
+        }
+
+        function prevStep() {
+            if (currentStepIndex > 0) {
+                currentStepIndex--;
+                updateUI();
+            }
+        }
+
+        function togglePlay() {
+            if (isPlaying) {
+                pauseAutoPlay();
+            } else {
+                if (currentStepIndex === steps.length - 1) currentStepIndex = 0; // 重头播放
+                isPlaying = true;
+                document.getElementById('btnPlay').innerText = "暂停";
+                document.getElementById('btnPlay').classList.replace('bg-indigo-600', 'bg-red-600');
+                document.getElementById('btnPlay').classList.replace('hover:bg-indigo-700', 'hover:bg-red-700');
+                
+                let speed = parseInt(document.getElementById('speedRange').value);
+                playInterval = setInterval(nextStep, speed);
+            }
+        }
+
+        function pauseAutoPlay() {
+            isPlaying = false;
+            clearInterval(playInterval);
+            document.getElementById('btnPlay').innerText = "自动播放";
+            document.getElementById('btnPlay').classList.replace('bg-red-600', 'bg-indigo-600');
+            document.getElementById('btnPlay').classList.replace('hover:bg-red-700', 'hover:bg-indigo-700');
+        }
+
+        // 绑定事件
+        document.getElementById('btnNext').addEventListener('click', () => { pauseAutoPlay(); nextStep(); });
+        document.getElementById('btnPrev').addEventListener('click', () => { pauseAutoPlay(); prevStep(); });
+        document.getElementById('btnPlay').addEventListener('click', togglePlay);
+        
+        document.getElementById('speedRange').addEventListener('change', (e) => {
+            if (isPlaying) {
+                pauseAutoPlay();
+                togglePlay(); // 使用新速度重启
+            }
+        });
+
+        // 初始化渲染
+        updateUI();
+    </script>
+</body>
+</html>

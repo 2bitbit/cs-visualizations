@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>凸多边形最优三角剖分 - 动态规划可视化</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { background-color: #f3f4f6; color: #1f2937; }
+        .dp-cell { transition: all 0.3s; }
+        .highlight-calc { background-color: #fef08a !important; transform: scale(1.05); z-index: 10; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        .highlight-read { background-color: #bfdbfe !important; }
+        .highlight-done { background-color: #bbf7d0 !important; }
+        canvas { touch-action: none; }
+    </style>
+</head>
+<body class="p-4 h-screen box-border flex flex-col font-sans">
+    <div id="root" class="h-full max-w-7xl mx-auto w-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // 辅助函数：计算两点间距离
+        const dist = (p1, p2) => Math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2);
+        
+        // 辅助函数：计算三角形权重（周长）
+        const calcWeight = (p1, p2, p3) => dist(p1, p2) + dist(p2, p3) + dist(p3, p1);
+
+        const App = () => {
+            const N = 6; // 顶点数量（六边形比较合适，既复杂又不至于状态爆炸）
+            const canvasRef = useRef(null);
+            
+            // 状态
+            const [steps, setSteps] = useState([]);
+            const [currentStepIndex, setCurrentStepIndex] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const playSpeed = 600; // 毫秒
+
+            // 多边形顶点坐标 (中心在 0,0，半径为R)
+            const vertices = useMemo(() => {
+                const pts = [];
+                const R = 150;
+                // 从顶部开始，逆时针
+                for (let i = 0; i < N; i++) {
+                    const angle = -Math.PI / 2 + (2 * Math.PI * i) / N;
+                    pts.push({ x: R * Math.cos(angle), y: R * Math.sin(angle), id: i });
+                }
+                return pts;
+            }, []);
+
+            // 初始化并预计算 DP 所有步骤
+            useEffect(() => {
+                const generatedSteps = [];
+                const dp = Array(N).fill(0).map(() => Array(N).fill(Infinity));
+                const s = Array(N).fill(0).map(() => Array(N).fill(-1));
+
+                // 初始状态 (长度为1的区间，退化线段，权重为0)
+                const initialTable = dp.map(row => [...row]);
+                for(let i=0; i<N-1; i++) {
+                    initialTable[i][i+1] = 0;
+                }
+                generatedSteps.push({ 
+                    type: 'INIT', 
+                    desc: '初始化基础状态。当多边形退化为一条线段(j=i+1)时，无法构成三角形，花费为 0。',
+                    table: initialTable.map(row => [...row])
+                });
+
+                let currentTable = initialTable.map(row => [...row]);
+
+                // 区间 DP
+                for (let len = 2; len < N; len++) {
+                    for (let i = 0; i < N - len; i++) {
+                        let j = i + len;
+                        generatedSteps.push({
+                            type: 'START_CELL',
+                            i, j,
+                            desc: `开始求解子多边形 v${i}...v${j} 的最优解 (基底边为 v${i}v${j})。`,
+                            table: currentTable.map(row => [...row])
+                        });
+
+                        let minCost = Infinity;
+                        let bestK = -1;
+
+                        for (let k = i + 1; k < j; k++) {
+                            const w = calcWeight(vertices[i], vertices[k], vertices[j]);
+                            const cost = currentTable[i][k] + currentTable[k][j] + w;
+                            
+                            generatedSteps.push({
+                                type: 'EVAL_K',
+                                i, j, k,
+                                cost, w,
+                                dpLeft: currentTable[i][k], dpRight: currentTable[k][j],
+                                desc: `尝试以 v${k} 为顶点构成三角形 v${i}v${k}v${j}。成本 = 左半边 dp[${i}][${k}] + 右半边 dp[${k}][${j}] + 此三角形权重。`,
+                                table: currentTable.map(row => [...row])
+                            });
+
+                            if (cost < minCost) {
+                                minCost = cost;
+                                bestK = k;
+                            }
+                        }
+
+                        currentTable[i][j] = minCost;
+                        s[i][j] = bestK;
+                        
+                        generatedSteps.push({
+                            type: 'FINISH_CELL',
+                            i, j, bestK, minCost,
+                            desc: `多边形 v${i}...v${j} 的最优解已找到，选取 v${bestK} 构成的三角形。最小代价记录为 ${minCost.toFixed(1)}。`,
+                            table: currentTable.map(row => [...row])
+                        });
+                    }
+                }
+
+                // 回溯重构最终的弦
+                const finalChords = [];
+                const getChords = (i, j) => {
+                    if (j <= i + 1) return;
+                    const k = s[i][j];
+                    if (k !== i + 1) finalChords.push([i, k]);
+                    if (j !== k + 1) finalChords.push([k, j]);
+                    getChords(i, k);
+                    getChords(k, j);
+                };
+                getChords(0, N - 1);
+
+                generatedSteps.push({
+                    type: 'DONE',
+                    desc: 'DP 计算完成！最终多边形已被最优地三角剖分。',
+                    table: currentTable.map(row => [...row]),
+                    chords: finalChords
+                });
+
+                setSteps(generatedSteps);
+            }, [vertices]);
+
+            // 自动播放逻辑
+            useEffect(() => {
+                let timer;
+                if (isPlaying && steps.length > 0) {
+                    timer = setInterval(() => {
+                        setCurrentStepIndex(prev => {
+                            if (prev < steps.length - 1) return prev + 1;
+                            setIsPlaying(false);
+                            return prev;
+                        });
+                    }, playSpeed);
+                }
+                return () => clearInterval(timer);
+            }, [isPlaying, steps.length]);
+
+            // 绘制 Canvas
+            useEffect(() => {
+                if (!canvasRef.current || steps.length === 0) return;
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                const width = canvas.width;
+                const height = canvas.height;
+                const cx = width / 2;
+                const cy = height / 2;
+
+                ctx.clearRect(0, 0, width, height);
+
+                const step = steps[currentStepIndex];
+
+                // 将逻辑坐标转为屏幕坐标
+                const mapPt = (pt) => ({ x: pt.x + cx, y: pt.y + cy });
+                const screenVertices = vertices.map(mapPt);
+
+                // 辅助函数：绘制多边形
+                const drawPoly = (pts, fillColor, strokeColor, lineWidth = 2) => {
+                    if(pts.length === 0) return;
+                    ctx.beginPath();
+                    ctx.moveTo(pts[0].x, pts[0].y);
+                    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+                    ctx.closePath();
+                    if (fillColor) { ctx.fillStyle = fillColor; ctx.fill(); }
+                    if (strokeColor) { ctx.strokeStyle = strokeColor; ctx.lineWidth = lineWidth; ctx.stroke(); }
+                };
+
+                // 1. 如果有高亮子多边形区域 (正在求解 i 到 j)
+                if (step.type === 'START_CELL' || step.type === 'EVAL_K' || step.type === 'FINISH_CELL') {
+                    const { i, j } = step;
+                    const subPolyPts = [];
+                    for(let v=i; v<=j; v++) subPolyPts.push(screenVertices[v]);
+                    drawPoly(subPolyPts, 'rgba(59, 130, 246, 0.1)', null); // 浅蓝色背景
+                }
+
+                // 2. 如果正在评估某个 k
+                if (step.type === 'EVAL_K') {
+                    const { i, j, k } = step;
+                    // 绘制左子多边形
+                    const leftPts = []; for(let v=i; v<=k; v++) leftPts.push(screenVertices[v]);
+                    drawPoly(leftPts, 'rgba(147, 197, 253, 0.4)', null);
+                    // 绘制右子多边形
+                    const rightPts = []; for(let v=k; v<=j; v++) rightPts.push(screenVertices[v]);
+                    drawPoly(rightPts, 'rgba(167, 243, 208, 0.4)', null);
+                    
+                    // 绘制当前考察的三角形
+                    drawPoly([screenVertices[i], screenVertices[k], screenVertices[j]], 'rgba(253, 224, 71, 0.6)', '#eab308', 2);
+                }
+
+                // 3. 绘制基础边框
+                drawPoly(screenVertices, null, '#374151', 3);
+
+                // 4. 绘制已确定的弦 (DONE 状态)
+                if (step.type === 'DONE' && step.chords) {
+                    ctx.strokeStyle = '#2563eb';
+                    ctx.lineWidth = 2;
+                    step.chords.forEach(([u, v]) => {
+                        ctx.beginPath();
+                        ctx.moveTo(screenVertices[u].x, screenVertices[u].y);
+                        ctx.lineTo(screenVertices[v].x, screenVertices[v].y);
+                        ctx.stroke();
+                    });
+                }
+
+                // 5. 绘制顶点
+                screenVertices.forEach((pt, i) => {
+                    ctx.beginPath();
+                    ctx.arc(pt.x, pt.y, 16, 0, 2 * Math.PI);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fill();
+                    ctx.strokeStyle = '#111827';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    
+                    ctx.fillStyle = '#111827';
+                    ctx.font = 'bold 14px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(`v${i}`, pt.x, pt.y);
+                });
+
+                // 6. 连线标注（如果是 EVAL_K）
+                if(step.type === 'EVAL_K') {
+                    ctx.fillStyle = '#b45309';
+                    ctx.font = 'bold 14px sans-serif';
+                    // 简单在中心下方显示
+                    ctx.fillText(`正在验证 k=${step.k}`, cx, height - 30);
+                }
+
+            }, [steps, currentStepIndex, vertices]);
+
+            if (steps.length === 0) return <div className="flex items-center justify-center h-full">初始化中...</div>;
+
+            const step = steps[currentStepIndex];
+            const currentTable = step.table;
+
+            // 获取表格单元格的 CSS 类
+            const getCellClass = (r, c) => {
+                let base = "border p-2 text-center w-16 h-12 relative text-sm ";
+                if (c < r) return base + "bg-gray-100 text-gray-300"; // 下三角无用
+                if (c === r) return base + "bg-gray-200 text-gray-400"; // 对角线无用
+                if (c === r + 1) return base + "bg-white text-gray-800"; // Base case
+                
+                if (currentTable[r][c] === Infinity) base += "bg-white text-transparent ";
+                else base += "bg-white text-gray-800 ";
+
+                if (step.type === 'EVAL_K' || step.type === 'START_CELL' || step.type === 'FINISH_CELL') {
+                    if (r === step.i && c === step.j) base += "highlight-calc font-bold";
+                }
+                if (step.type === 'EVAL_K') {
+                    if ((r === step.i && c === step.k) || (r === step.k && c === step.j)) {
+                        base += "highlight-read font-bold";
+                    }
+                }
+                if (step.type === 'DONE' && currentTable[r][c] !== Infinity && c > r+1) {
+                     base += "highlight-done";
+                }
+                return base;
+            };
+
+            return (
+                <div className="flex flex-col h-full bg-white shadow-xl rounded-xl overflow-hidden border border-gray-200">
+                    {/* Header Controls */}
+                    <div className="flex items-center justify-between bg-slate-800 text-white p-4 border-b border-slate-700 h-16 shrink-0">
+                        <h1 className="text-xl font-bold">区间DP: 凸多边形最优三角剖分</h1>
+                        <div className="flex space-x-3">
+                            <button onClick={() => { setIsPlaying(false); setCurrentStepIndex(0); }} className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded font-medium transition text-sm">
+                                重置
+                            </button>
+                            <button onClick={() => { setIsPlaying(false); setCurrentStepIndex(Math.max(0, currentStepIndex - 1)); }} disabled={currentStepIndex === 0} className="px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 rounded font-medium transition text-sm">
+                                上一步
+                            </button>
+                            <button onClick={() => setIsPlaying(!isPlaying)} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded font-medium transition text-sm w-24">
+                                {isPlaying ? '暂停' : '自动播放'}
+                            </button>
+                            <button onClick={() => { setIsPlaying(false); setCurrentStepIndex(Math.min(steps.length - 1, currentStepIndex + 1)); }} disabled={currentStepIndex === steps.length - 1} className="px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 rounded font-medium transition text-sm">
+                                下一步
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Main Content */}
+                    <div className="flex flex-1 overflow-hidden">
+                        {/* Left Side: Canvas & Description */}
+                        <div className="w-1/2 border-r border-gray-200 flex flex-col bg-gray-50">
+                            <div className="p-4 bg-white border-b border-gray-200 h-32 shrink-0 flex flex-col justify-center">
+                                <h2 className="text-sm font-semibold text-gray-500 mb-1 uppercase tracking-wider">状态说明 {currentStepIndex + 1} / {steps.length}</h2>
+                                <p className="text-lg font-medium text-gray-800">{step.desc}</p>
+                                {step.type === 'EVAL_K' && (
+                                    <div className="mt-2 text-sm text-blue-700 font-mono bg-blue-50 p-2 rounded inline-block w-fit">
+                                        dp[{step.i}][{step.j}] = dp[{step.i}][{step.k}]({step.dpLeft.toFixed(1)}) + dp[{step.k}][{step.j}]({step.dpRight.toFixed(1)}) + W({step.w.toFixed(1)}) = <b>{step.cost.toFixed(1)}</b>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="flex-1 flex items-center justify-center p-4 relative">
+                                <canvas ref={canvasRef} width="500" height="500" className="max-w-full max-h-full"></canvas>
+                            </div>
+                        </div>
+
+                        {/* Right Side: DP Table */}
+                        <div className="w-1/2 flex flex-col bg-white">
+                            <div className="p-4 border-b border-gray-200 h-16 shrink-0 flex items-center bg-gray-50">
+                                <h2 className="text-lg font-bold text-gray-700">状态表 dp[i][j]</h2>
+                            </div>
+                            <div className="flex-1 p-6 overflow-auto flex items-center justify-center">
+                                <table className="border-collapse shadow-sm text-sm">
+                                    <thead>
+                                        <tr>
+                                            <th className="border p-2 w-12 bg-gray-100 text-gray-500">i \ j</th>
+                                            {Array.from({length: N}).map((_, idx) => (
+                                                <th key={`th-${idx}`} className="border p-2 w-16 bg-gray-100 font-bold text-gray-700">{idx}</th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {Array.from({length: N}).map((_, r) => (
+                                            <tr key={`tr-${r}`}>
+                                                <td className="border p-2 font-bold bg-gray-100 text-center text-gray-700">{r}</td>
+                                                {Array.from({length: N}).map((_, c) => {
+                                                    const val = currentTable[r][c];
+                                                    const displayVal = val === Infinity ? "" : val.toFixed(1);
+                                                    return (
+                                                        <td key={`td-${r}-${c}`} className={getCellClass(r, c)}>
+                                                            {displayVal}
+                                                        </td>
+                                                    );
+                                                })}
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div className="h-24 bg-gray-50 border-t border-gray-200 p-4 shrink-0 flex items-center space-x-6 text-sm text-gray-600">
+                                <div className="flex items-center"><span className="w-4 h-4 bg-yellow-200 border border-yellow-400 mr-2 inline-block shadow"></span>正在计算的目标位置</div>
+                                <div className="flex items-center"><span className="w-4 h-4 bg-blue-200 border border-blue-400 mr-2 inline-block"></span>正在读取的子问题依赖</div>
+                                <div className="flex items-center"><span className="w-4 h-4 bg-green-200 border border-green-400 mr-2 inline-block"></span>最终完成计算的值</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

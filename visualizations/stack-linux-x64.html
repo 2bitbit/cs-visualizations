@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System V AMD64 ABI 完整栈帧分析 (局部变量、对齐与红区)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .transition-all {
+            transition-property: all;
+            transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+            transition-duration: 300ms;
+        }
+        .active-line {
+            background-color: #fef08a; /* yellow-200 */
+            border-left: 4px solid #eab308;
+        }
+        #rip-indicator {
+            transition: top 300ms cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .red-zone-bg {
+            background-image: repeating-linear-gradient(-45deg, #fff1f2, #fff1f2 10px, #ffe4e6 10px, #ffe4e6 20px);
+        }
+        .local-bg {
+            background-color: #f0fdf4; /* green-50 */
+        }
+        .mem-scroll::-webkit-scrollbar { width: 8px; }
+        .mem-scroll::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        .mem-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .mem-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="bg-slate-50 p-4 md:p-8 font-sans text-slate-800">
+
+<div class="max-w-[1500px] mx-auto bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-200">
+    <!-- Header & Controls -->
+    <div class="bg-slate-900 text-white p-6 flex flex-col md:flex-row justify-between items-center z-20 relative shadow-md">
+        <div>
+            <h1 class="text-2xl font-bold tracking-tight text-pink-400">Linux x64 (System V) 核心机制：动态对齐与红区</h1>
+            <p class="text-sm text-slate-300 mt-2 font-mono">
+                场景: 分配 2 个局部变量，调用 <code class="bg-slate-800 px-2 py-1 rounded text-green-400">func(1..8)</code> | AT&T 语法
+            </p>
+        </div>
+        <div class="mt-4 md:mt-0 flex flex-col items-end gap-2">
+            <div class="flex gap-3">
+                <button id="btn-prev" class="px-5 py-2 bg-slate-700 hover:bg-slate-600 rounded disabled:opacity-50 transition-colors border border-slate-600 font-medium">上一步</button>
+                <button id="btn-next" class="px-5 py-2 bg-pink-600 hover:bg-pink-500 rounded font-bold disabled:opacity-50 transition-colors shadow-lg shadow-pink-500/30">下一步 (单步执行)</button>
+                <button id="btn-reset" class="px-5 py-2 bg-red-600 hover:bg-red-500 rounded transition-colors border border-red-700 font-medium">重置</button>
+            </div>
+            <div id="step-description" class="text-sm text-yellow-300 font-mono max-w-2xl text-right">初始化完成，等待执行...</div>
+        </div>
+    </div>
+
+    <!-- Main Content Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 p-6 gap-6 relative">
+        
+        <!-- Left: Code Section (Span 5) -->
+        <div class="lg:col-span-5 flex flex-col">
+            <h2 class="text-lg font-bold mb-3 text-slate-800 border-b-2 border-slate-200 pb-2 flex justify-between">
+                <span>反汇编指令流 (AT&T 语法)</span>
+                <span class="text-sm font-normal text-slate-500">RIP 地址</span>
+            </h2>
+            <div class="bg-slate-50 border border-slate-300 rounded-lg p-3 font-mono text-xs shadow-inner relative overflow-x-auto h-[580px] overflow-y-auto">
+                <div id="rip-indicator" class="absolute left-1 flex items-center text-red-600 font-bold z-10" style="top: -100px;">
+                    <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>
+                </div>
+
+                <div class="pl-6 whitespace-nowrap">
+                    <div class="text-blue-800 font-bold p-1">test: <span class="text-slate-500 font-normal text-xs">// 调用者 Caller</span></div>
+                    <div class="flex justify-between p-1 text-slate-400 italic">
+                        <span># 入口 RSP = 0x...E008 (非 16 字节对齐)</span>
+                    </div>
+                    <div id="code-1" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>pushq   %rbp <span class="text-slate-400 pl-2"># 保存旧基址 (RSP 变 0x...E000，对齐)</span></span>
+                        <span class="text-slate-400">0x...1020</span>
+                    </div>
+                    <div id="code-2" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>movq    %rsp, %rbp <span class="text-slate-400 pl-2"># 确立帧基址</span></span>
+                        <span class="text-slate-400">0x...1021</span>
+                    </div>
+                    
+                    <div class="text-slate-500 font-normal text-xs mt-2 mb-1 p-1"># 1. 动态分配局部变量</div>
+                    <div id="code-3" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>subq    $16, %rsp <span class="text-slate-400 pl-2"># 腾出 16 字节 (RSP 依然 16 字节对齐!)</span></span>
+                        <span class="text-slate-400">0x...1024</span>
+                    </div>
+                    <div id="code-4" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>movq    $99, -8(%rbp) <span class="text-slate-400 pl-2"># 局部变量 B</span></span>
+                        <span class="text-slate-400">0x...1028</span>
+                    </div>
+                    <div id="code-5" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>movq    $88, -16(%rbp) <span class="text-slate-400 pl-2"># 局部变量 A</span></span>
+                        <span class="text-slate-400">0x...1030</span>
+                    </div>
+
+                    <div class="text-slate-500 font-normal text-xs mt-2 mb-1 p-1"># 2. 动态压栈参数 (从右到左)</div>
+                    <div id="code-6" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>pushq   $8 <span class="text-slate-400 pl-2"># 第 8 个参数 (RSP 破除对齐)</span></span>
+                        <span class="text-slate-400">0x...1038</span>
+                    </div>
+                    <div id="code-7" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>pushq   $7 <span class="text-slate-400 pl-2"># 第 7 个参数 (RSP 再次 16 字节对齐!)</span></span>
+                        <span class="text-slate-400">0x...103A</span>
+                    </div>
+
+                    <div class="text-slate-500 font-normal text-xs mt-2 mb-1 p-1"># 3. 填充寄存器参数</div>
+                    <div id="code-8" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>movq    ... %r9, %r8 ... %rdi <span class="text-slate-400 pl-2"># 准备 6 个寄存器参数</span></span>
+                        <span class="text-slate-400">0x...103C</span>
+                    </div>
+
+                    <div id="code-9" class="flex justify-between p-1 rounded transition-colors pr-2 mt-2">
+                        <span>call    func <span class="text-slate-400 pl-2"># 完美满足对齐要求，跳转执行</span></span>
+                        <span class="text-slate-400">0x...1050</span>
+                    </div>
+                    
+                    <div class="text-slate-500 font-normal text-xs mt-2 mb-1 p-1"># 4. 调用者清理现场</div>
+                    <div id="code-17" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>addq    $16, %rsp <span class="text-slate-400 pl-2"># 调用者主动弹出 2 个栈参数</span></span>
+                        <span class="text-slate-400">0x...1055</span>
+                    </div>
+                    <div id="code-18" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>leave   <span class="text-slate-400 pl-2"># 销毁 test 栈帧</span></span>
+                        <span class="text-slate-400">0x...1059</span>
+                    </div>
+                    <div id="code-19" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>ret     <span class="text-slate-400 pl-2"># 返回</span></span>
+                        <span class="text-slate-400">0x...105A</span>
+                    </div>
+                    
+                    <div class="my-3 border-t border-slate-300 border-dashed"></div>
+                    
+                    <div class="text-blue-800 font-bold p-1">func: <span class="text-slate-500 font-normal text-xs">// 被调用者 (叶子函数)</span></div>
+                    <div id="code-10" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>pushq   %rbp <span class="text-slate-400 pl-2"></span></span>
+                        <span class="text-slate-400">0x...2000</span>
+                    </div>
+                    <div id="code-11" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>movq    %rsp, %rbp <span class="text-slate-400 pl-2"></span></span>
+                        <span class="text-slate-400">0x...2001</span>
+                    </div>
+                    
+                    <div class="text-slate-500 font-normal text-xs mt-2 mb-1 p-1"># 直接使用 Red Zone，无 subq %rsp 分配！</div>
+                    <div id="code-12" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>movq    %rdi, -8(%rbp) <span class="text-slate-400 pl-2"># Spill RDI 到红区</span></span>
+                        <span class="text-slate-400">0x...2004</span>
+                    </div>
+                    <div id="code-13" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>movq    %rsi, -16(%rbp) <span class="text-slate-400 pl-2"># Spill RSI 到红区</span></span>
+                        <span class="text-slate-400">0x...2008</span>
+                    </div>
+                    <div class="flex justify-between p-1 rounded text-slate-400 pr-2 italic">
+                        <span>...     <span class="pl-2"># 函数核心逻辑</span></span>
+                        <span>...</span>
+                    </div>
+                    
+                    <div class="text-slate-500 font-normal text-xs mt-2 mb-1 p-1"># 5. 被调者返回</div>
+                    <div id="code-15" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>popq    %rbp <span class="text-slate-400 pl-2"># 恢复调用者的 RBP</span></span>
+                        <span class="text-slate-400">0x...2050</span>
+                    </div>
+                    <div id="code-16" class="flex justify-between p-1 rounded transition-colors pr-2">
+                        <span>ret     <span class="text-slate-400 pl-2"># 弹栈返回 test</span></span>
+                        <span class="text-slate-400">0x...2051</span>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-4 p-3 bg-yellow-50 text-yellow-800 rounded text-sm border border-yellow-200">
+                <strong>调试器视角：</strong>黄标行表示 <strong>即将执行</strong> 的下一条指令。右侧状态面板展现该指令执行 <strong>之前</strong> 的真实机器环境。
+            </div>
+        </div>
+
+        <!-- Middle: CPU Registers (Span 3) -->
+        <div class="lg:col-span-3 flex flex-col">
+            <h2 class="text-lg font-bold mb-3 text-slate-800 border-b-2 border-slate-200 pb-2">寄存器状态</h2>
+            <div class="bg-slate-900 rounded-lg p-4 shadow-inner text-green-400 font-mono text-sm grid grid-cols-1 gap-2 border border-slate-800">
+                
+                <div class="flex flex-col border-b border-slate-700 pb-2 mb-1">
+                    <span class="text-xs text-slate-400 mb-1 font-sans">栈指针 & 基址指针</span>
+                    <div class="flex justify-between">
+                        <span class="font-bold text-blue-400">RSP</span>
+                        <span id="reg-rsp" class="transition-all font-bold">0x...E008</span>
+                    </div>
+                    <div class="flex justify-between mt-1">
+                        <span class="font-bold text-teal-400">RBP</span>
+                        <span id="reg-rbp" class="transition-all font-bold text-slate-300">0x...E020</span>
+                    </div>
+                </div>
+
+                <div class="flex flex-col pt-1">
+                    <span class="text-xs text-slate-400 mb-1 font-sans">传参寄存器 (System V)</span>
+                    <div class="grid grid-cols-2 gap-x-2 gap-y-1">
+                        <div class="flex justify-between"><span class="font-bold text-purple-400">RDI</span><span id="reg-rdi" class="transition-all text-slate-500">0x0</span></div>
+                        <div class="flex justify-between"><span class="font-bold text-purple-400">RSI</span><span id="reg-rsi" class="transition-all text-slate-500">0x0</span></div>
+                        <div class="flex justify-between"><span class="font-bold text-purple-400">RDX</span><span id="reg-rdx" class="transition-all text-slate-500">0x0</span></div>
+                        <div class="flex justify-between"><span class="font-bold text-purple-400">RCX</span><span id="reg-rcx" class="transition-all text-slate-500">0x0</span></div>
+                        <div class="flex justify-between"><span class="font-bold text-purple-400">R8</span><span id="reg-r8" class="transition-all text-slate-500">0x0</span></div>
+                        <div class="flex justify-between"><span class="font-bold text-purple-400">R9</span><span id="reg-r9" class="transition-all text-slate-500">0x0</span></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-4 p-3 bg-pink-50 text-pink-900 rounded-lg text-sm border border-pink-200 shadow-sm">
+                <strong>对齐与红区解析：</strong>
+                <ul class="list-disc pl-5 mt-1 space-y-1 text-xs">
+                    <li><span class="font-bold">无 Shadow Space：</span>Linux 不要求预留 32 字节空地。</li>
+                    <li><span class="font-bold text-blue-700">动态对齐法：</span>局部变量(16B) + 栈参数(16B) = 32B。这种搭配使得 <code>call</code> 之前恰好维持 16 字节对齐。</li>
+                    <li><span class="font-bold text-pink-700">红区 (Red Zone)：</span>叶子函数可以直接利用 RSP 下方的 128 字节，避免了不必要的 <code>sub %rsp</code> 指令。</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Right: Memory Stack Section (Span 4) -->
+        <div class="lg:col-span-4 flex flex-col items-center">
+            <h2 class="text-lg font-bold mb-3 text-slate-800 border-b-2 border-slate-200 w-full pb-2">物理内存栈 (每行 8 字节)</h2>
+            
+            <div class="relative w-full mt-2 pl-[110px] h-[580px] overflow-y-auto mem-scroll">
+                
+                <!-- RSP Pointer -->
+                <div id="ptr-rsp" class="absolute left-0 flex items-center transition-all duration-300 text-blue-600 font-bold z-20" style="top: -100px;">
+                    <span class="mr-1 text-sm bg-blue-100 border border-blue-300 px-1.5 py-0.5 rounded shadow-sm">RSP</span>
+                    <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z" transform="rotate(90 12 12)"/></svg>
+                </div>
+
+                <!-- RBP Pointer -->
+                <div id="ptr-rbp" class="absolute left-0 flex items-center transition-all duration-300 text-teal-600 font-bold z-20" style="top: -100px;">
+                    <span class="mr-1 text-sm bg-teal-100 border border-teal-300 px-1.5 py-0.5 rounded shadow-sm">RBP</span>
+                    <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z" transform="rotate(90 12 12)"/></svg>
+                </div>
+
+                <!-- Memory Cells -->
+                <div id="memory-container" class="border border-slate-300 bg-slate-100 rounded shadow-sm flex flex-col relative w-full">
+                    <!-- JS generated content -->
+                </div>
+                
+                <div class="text-center text-xs text-slate-500 mt-3 font-mono sticky bottom-0 bg-slate-50/90 py-1 backdrop-blur">↓ 栈向低地址生长 ↓</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const CELL_HEIGHT = 46; 
+    
+    // Addresses logical layout (High to Low, System V uses DFE0 etc.)
+    const addresses = [
+        0xE010, // Caller's Caller Data
+        0xE008, // Return Addr of 'test'
+        0xE000, // Saved RBP (test)
+        0xDFF8, // Local B (-8(rbp))
+        0xDFF0, // Local A (-16(rbp))
+        0xDFE8, // Arg 8 (pushed)
+        0xDFE0, // Arg 7 (pushed)
+        0xDFD8, // Return Addr of 'func'
+        0xDFD0, // Saved RBP (func)
+        0xDFC8, // Red Zone - RDI Spill
+        0xDFC0  // Red Zone - RSI Spill
+    ];
+
+    function formatHex(dec) {
+        return '0x...' + dec.toString(16).toUpperCase();
+    }
+
+    // Execution States Definition
+    const steps = [
+        {
+            line: 1, rsp: 0xE008, rbp: 0xE020,
+            regs: {rdi: 0, rsi: 0, rdx: 0, rcx: 0, r8: 0, r9: 0}, stack: {},
+            desc: "【初始状态】此时黄标 (RIP) 指向 `pushq %rbp`。在此指令执行前，RSP=0x...E008（以 8 结尾），不符合 16 字节对齐。即将执行第一条指令。"
+        },
+        {
+            line: 2, rsp: 0xE000, rbp: 0xE020,
+            regs: {rdi: 0, rsi: 0, rdx: 0, rcx: 0, r8: 0, r9: 0},
+            stack: {0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"}},
+            desc: "【序言：保存基址】上一条 `pushq %rbp` 已执行。RSP 下移变为 0x...E000。注意：这一步不仅保存了旧基址，更立刻让 RSP 恢复了 16 字节对齐！即将确立帧基址。"
+        },
+        {
+            line: 3, rsp: 0xE000, rbp: 0xE000,
+            regs: {rdi: 0, rsi: 0, rdx: 0, rcx: 0, r8: 0, r9: 0},
+            stack: {0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"}},
+            desc: "【序言：确立帧基址】上一条 `movq %rsp, %rbp` 已执行。RBP 现也指向 0x...E000，当前函数栈帧基址正式确立。即将开始分配局部变量。"
+        },
+        {
+            line: 4, rsp: 0xDFF0, rbp: 0xE000,
+            regs: {rdi: 0, rsi: 0, rdx: 0, rcx: 0, r8: 0, r9: 0},
+            stack: {0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"}},
+            desc: "【分配局部变量】上一条 `subq $16, %rsp` 已执行，腾出 16 字节空间。关键点：因为 16 是 16 的倍数，RSP (0x...DFF0) 依然保持 16 字节对齐状态！即将写入变量。"
+        },
+        {
+            line: 5, rsp: 0xDFF0, rbp: 0xE000,
+            regs: {rdi: 0, rsi: 0, rdx: 0, rcx: 0, r8: 0, r9: 0},
+            stack: {0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"}, 0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}},
+            desc: "【写入局部变量】99 已成功写入 `-8(%rbp)` 的内存位置。即将写入第二个局部变量。"
+        },
+        {
+            line: 6, rsp: 0xDFF0, rbp: 0xE000,
+            regs: {rdi: 0, rsi: 0, rdx: 0, rcx: 0, r8: 0, r9: 0},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"}
+            },
+            desc: "【写入局部变量】88 已被写入 `-16(%rbp)`。局部变量区准备完毕。接下来即将压入多出来的外部栈参数。"
+        },
+        {
+            line: 7, rsp: 0xDFE8, rbp: 0xE000,
+            regs: {rdi: 0, rsi: 0, rdx: 0, rcx: 0, r8: 0, r9: 0},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"},
+                0xDFE8: {val: "0x00000008", type: "arg", label: "参数 8"}
+            },
+            desc: "【压栈传参：打破对齐】`pushq $8` 已执行。RSP 下移至 0x...DFE8，16 字节对齐被短暂打破。即将压入第 7 个参数。"
+        },
+        {
+            line: 8, rsp: 0xDFE0, rbp: 0xE000,
+            regs: {rdi: 0, rsi: 0, rdx: 0, rcx: 0, r8: 0, r9: 0},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"},
+                0xDFE8: {val: "0x00000008", type: "arg", label: "参数 8"}, 0xDFE0: {val: "0x00000007", type: "arg", label: "参数 7"}
+            },
+            desc: "【压栈传参：恢复对齐】`pushq $7` 已执行。奇妙的动态拼凑发生了：压栈两次共耗 16 字节，使得 RSP 又完美恢复了 16 字节对齐！即将装填寄存器参数。"
+        },
+        {
+            line: 9, rsp: 0xDFE0, rbp: 0xE000,
+            regs: {rdi: 1, rsi: 2, rdx: 3, rcx: 4, r8: 5, r9: 6},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"},
+                0xDFE8: {val: "0x00000008", type: "arg", label: "参数 8"}, 0xDFE0: {val: "0x00000007", type: "arg", label: "参数 7"}
+            },
+            desc: "【准备跳转】前 6 个参数已全部装入对应的寄存器。所有参数就位，并且当前 RSP 完全满足 16 字节对齐！即将执行 `call func` 进行跨函数跳转。"
+        },
+        {
+            line: 10, rsp: 0xDFD8, rbp: 0xE000,
+            regs: {rdi: 1, rsi: 2, rdx: 3, rcx: 4, r8: 5, r9: 6},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"},
+                0xDFE8: {val: "0x00000008", type: "arg", label: "参数 8"}, 0xDFE0: {val: "0x00000007", type: "arg", label: "参数 7"},
+                0xDFD8: {val: "0x...1055", type: "meta", label: "返回地址 (打破对齐)"}
+            },
+            desc: "【进入被调函数】`call` 已经执行。硬件自动将返回地址压栈，RSP 变为 0x...DFD8。现在进入了子函数 func，即将执行 `push` 保护老爹基址。"
+        },
+        {
+            line: 11, rsp: 0xDFD0, rbp: 0xE000,
+            regs: {rdi: 1, rsi: 2, rdx: 3, rcx: 4, r8: 5, r9: 6},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"},
+                0xDFE8: {val: "0x00000008", type: "arg", label: "参数 8"}, 0xDFE0: {val: "0x00000007", type: "arg", label: "参数 7"},
+                0xDFD8: {val: "0x...1055", type: "meta", label: "返回地址"}, 0xDFD0: {val: "0x...E000", type: "meta", label: "Saved RBP"}
+            },
+            desc: "【func 序言】`pushq %rbp` 已执行，调用者的旧 RBP 入栈保护。RSP 下移至 0x...DFD0。即将建立 func 自己的栈基址。"
+        },
+        {
+            line: 12, rsp: 0xDFD0, rbp: 0xDFD0,
+            regs: {rdi: 1, rsi: 2, rdx: 3, rcx: 4, r8: 5, r9: 6},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"},
+                0xDFE8: {val: "0x00000008", type: "arg", label: "参数 8"}, 0xDFE0: {val: "0x00000007", type: "arg", label: "参数 7"},
+                0xDFD8: {val: "0x...1055", type: "meta", label: "返回地址"}, 0xDFD0: {val: "0x...E000", type: "meta", label: "Saved RBP"}
+            },
+            desc: "【func 建立基址】`movq %rsp, %rbp` 已执行。RBP 和 RSP 合体。由于这是一个不调其他函数的“叶子函数”，它即将直接把数据抛入下方的红区 (Red Zone)。"
+        },
+        {
+            line: 13, rsp: 0xDFD0, rbp: 0xDFD0,
+            regs: {rdi: 1, rsi: 2, rdx: 3, rcx: 4, r8: 5, r9: 6},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"},
+                0xDFE8: {val: "0x00000008", type: "arg", label: "参数 8"}, 0xDFE0: {val: "0x00000007", type: "arg", label: "参数 7"},
+                0xDFD8: {val: "0x...1055", type: "meta", label: "返回地址"}, 0xDFD0: {val: "0x...E000", type: "meta", label: "Saved RBP"},
+                0xDFC8: {val: "0x00000001", type: "redzone", label: "RDI Spill"}
+            },
+            desc: "【使用红区 - 无需分配】`movq %rdi, -8(%rbp)` 已执行。注意：RSP 根本没有下移！数据被安全地写入了当前 RSP 下方的红区保护段内。即将继续溢出 RSI。"
+        },
+        {
+            line: 15, rsp: 0xDFD0, rbp: 0xDFD0,
+            regs: {rdi: 1, rsi: 2, rdx: 3, rcx: 4, r8: 5, r9: 6},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"},
+                0xDFE8: {val: "0x00000008", type: "arg", label: "参数 8"}, 0xDFE0: {val: "0x00000007", type: "arg", label: "参数 7"},
+                0xDFD8: {val: "0x...1055", type: "meta", label: "返回地址"}, 0xDFD0: {val: "0x...E000", type: "meta", label: "Saved RBP"},
+                0xDFC8: {val: "0x00000001", type: "redzone", label: "RDI Spill"}, 0xDFC0: {val: "0x00000002", type: "redzone", label: "RSI Spill"}
+            },
+            desc: "【红区利用完毕】RSI 也成功写入红区。内部逻辑执行完毕。即将执行 `pop` 指令以复原老爹的 RBP。"
+        },
+        {
+            line: 16, rsp: 0xDFD8, rbp: 0xE000,
+            regs: {rdi: 1, rsi: 2, rdx: 3, rcx: 4, r8: 5, r9: 6},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"},
+                0xDFE8: {val: "0x00000008", type: "arg", label: "参数 8"}, 0xDFE0: {val: "0x00000007", type: "arg", label: "参数 7"},
+                0xDFD8: {val: "0x...1055", type: "meta", label: "返回地址"},
+                0xDFC8: {val: "0x00000001", type: "redzone", label: "RDI Spill (残留)"}, 0xDFC0: {val: "0x00000002", type: "redzone", label: "RSI Spill (残留)"}
+            },
+            desc: "【恢复调用者基址】`popq %rbp` 已执行。RBP 重新恢复到 test 的基址 0x...E000，RSP 随之弹起至 0x...DFD8。即将执行 `ret` 正式返回。"
+        },
+        {
+            line: 17, rsp: 0xDFE0, rbp: 0xE000,
+            regs: {rdi: 1, rsi: 2, rdx: 3, rcx: 4, r8: 5, r9: 6},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"},
+                0xDFE8: {val: "0x00000008", type: "arg", label: "参数 8"}, 0xDFE0: {val: "0x00000007", type: "arg", label: "参数 7"},
+                0xDFC8: {val: "0x00000001", type: "redzone", label: "RDI Spill (残留)"}, 0xDFC0: {val: "0x00000002", type: "redzone", label: "RSI Spill (残留)"}
+            },
+            desc: "【弹栈返回 test】`ret` 已执行，硬件将返回地址弹出送入 RIP。控制权交还给 test。请注意当前栈顶：参数 7 和 8 像垃圾一样顶在 RSP 头顶。即将由调用者亲自清理。"
+        },
+        {
+            line: 18, rsp: 0xDFF0, rbp: 0xE000,
+            regs: {rdi: 1, rsi: 2, rdx: 3, rcx: 4, r8: 5, r9: 6},
+            stack: {
+                0xE000: {val: "0x...E020", type: "meta", label: "旧 RBP"},
+                0xDFF8: {val: "0x00000063", type: "local", label: "局部变量 B (99)"}, 0xDFF0: {val: "0x00000058", type: "local", label: "局部变量 A (88)"},
+                0xDFE8: {val: "0x00000008", type: "arg", label: "参数 8 (废弃)"}, 0xDFE0: {val: "0x00000007", type: "arg", label: "参数 7 (废弃)"},
+                0xDFC8: {val: "0x00000001", type: "redzone", label: "RDI Spill (残留)"}, 0xDFC0: {val: "0x00000002", type: "redzone", label: "RSI Spill (残留)"}
+            },
+            desc: "【调用者清理现场】`addq $16, %rsp` 顺利执行。System V ABI 的精髓：谁压栈，谁清理！调用者主动废弃了入栈参数空间。即将销毁自身栈帧。"
+        },
+        {
+            line: 19, rsp: 0xE008, rbp: 0xE020,
+            regs: {rdi: 1, rsi: 2, rdx: 3, rcx: 4, r8: 5, r9: 6},
+            stack: {
+                0xDFF8: {val: "0x00000063", type: "local", label: "残留局部变量"}, 0xDFF0: {val: "0x00000058", type: "local", label: "残留局部变量"}
+            },
+            desc: "【销毁 test 栈帧】`leave` 已执行，直接丢弃局部变量空间并弹出 RBP。RSP 被置于最初的返回地址处。最后，即将执行 `ret` 告辞。"
+        },
+        {
+            line: 0, rsp: 0xE010, rbp: 0xE020,
+            regs: {rdi: 1, rsi: 2, rdx: 3, rcx: 4, r8: 5, r9: 6},
+            stack: {},
+            desc: "【生命周期完结】test 自身的 `ret` 已执行完毕。当前栈空间干净利落地交还给系统，整个动态演示生命周期结束。"
+        }
+    ];
+
+    let currentStepIndex = 0;
+
+    const memContainer = document.getElementById('memory-container');
+    const ptrRsp = document.getElementById('ptr-rsp');
+    const ptrRbp = document.getElementById('ptr-rbp');
+    const descText = document.getElementById('step-description');
+    const ripIndicator = document.getElementById('rip-indicator');
+    
+    function initMemory() {
+        memContainer.innerHTML = '';
+        addresses.forEach(addr => {
+            const cell = document.createElement('div');
+            cell.id = `cell-${addr}`;
+            
+            let bgClass = 'bg-white';
+            let sectionName = '';
+            let textColor = 'text-slate-700';
+
+            if (addr === 0xE010) {
+                bgClass = 'bg-slate-200';
+                sectionName = '<span class="text-[9px] text-slate-500 font-bold absolute right-1 bottom-1">上一级数据</span>';
+            } else if (addr === 0xE008) {
+                bgClass = 'bg-slate-100';
+            } else if (addr === 0xE000) {
+                bgClass = 'bg-teal-50';
+            } else if (addr === 0xDFF0 || addr === 0xDFF8) {
+                bgClass = 'local-bg';
+                if(addr === 0xDFF0) sectionName = '<span class="text-[9px] text-green-700 font-bold absolute right-1 bottom-1">局部变量区 (16B)</span>';
+            } else if (addr === 0xDFE0 || addr === 0xDFE8) {
+                bgClass = 'bg-orange-50';
+                if(addr === 0xDFE0) sectionName = '<span class="text-[9px] text-orange-600 font-bold absolute right-1 bottom-1">入栈参数区 (16B)</span>';
+            } else if (addr === 0xDFD8) {
+                bgClass = 'bg-slate-100';
+            } else if (addr === 0xDFD0) {
+                bgClass = 'bg-teal-50';
+            } else if (addr <= 0xDFC8) {
+                bgClass = 'red-zone-bg border-pink-100';
+                if(addr === 0xDFC0) sectionName = '<span class="text-[9px] text-pink-700 font-bold absolute right-1 bottom-1">红区 Red Zone (直接存取)</span>';
+            }
+
+            cell.className = `flex items-center w-full border-b border-slate-200 relative ${bgClass}`;
+            cell.style.height = `${CELL_HEIGHT}px`;
+            
+            const addrLabel = document.createElement('div');
+            addrLabel.className = 'absolute -left-[108px] w-[105px] text-right font-mono py-0.5 pr-2 border-r border-slate-300 flex flex-col justify-center h-full bg-slate-50';
+            addrLabel.innerHTML = `<span class="text-xs font-bold ${textColor}">${formatHex(addr)}</span>`;
+            
+            const contentBox = document.createElement('div');
+            contentBox.id = `content-${addr}`;
+            contentBox.className = 'w-full h-full flex flex-col items-center justify-center font-mono text-sm text-slate-400 transition-colors duration-300 relative';
+            contentBox.innerHTML = `<span>? (未分配/可用)</span>${sectionName}`;
+
+            cell.appendChild(addrLabel);
+            cell.appendChild(contentBox);
+            memContainer.appendChild(cell);
+        });
+    }
+
+    function calculatePointerTop(address) {
+        if (address > addresses[0] || address < addresses[addresses.length-1]) return -100;
+        const index = addresses.indexOf(address);
+        if (index === -1) return -100;
+        return (index * CELL_HEIGHT) + (CELL_HEIGHT / 2) - 10;
+    }
+
+    function renderStep(index) {
+        const state = steps[index];
+        descText.innerText = state.desc;
+
+        // Code highlight -> ALWAYS HIGHLIGHT NEXT LINE
+        document.querySelectorAll('[id^="code-"]').forEach(el => el.classList.remove('active-line'));
+        if (state.line > 0) {
+            const activeCode = document.getElementById(`code-${state.line}`);
+            if (activeCode) {
+                activeCode.classList.add('active-line');
+                ripIndicator.style.top = `${activeCode.offsetTop + 6}px`;
+            }
+        } else {
+            ripIndicator.style.top = `-100px`;
+        }
+
+        // Registers
+        document.getElementById('reg-rsp').innerText = formatHex(state.rsp);
+        document.getElementById('reg-rbp').innerText = formatHex(state.rbp);
+        
+        ['rdi', 'rsi', 'rdx', 'rcx', 'r8', 'r9'].forEach(reg => {
+            const el = document.getElementById(`reg-${reg}`);
+            el.innerText = state.regs[reg] === 0 ? '0x0' : `0x${state.regs[reg]}`;
+            el.className = state.regs[reg] === 0 ? 'transition-all text-slate-500' : 'transition-all font-bold text-green-300';
+        });
+
+        // Memory
+        addresses.forEach(addr => {
+            const contentBox = document.getElementById(`content-${addr}`);
+            const data = state.stack[addr];
+            
+            // Keep section names
+            let sectionName = '';
+            if (addr === 0xE010) sectionName = '<span class="text-[9px] text-slate-500 font-bold absolute right-1 bottom-1">上一级数据</span>';
+            if(addr === 0xDFF0) sectionName = '<span class="text-[9px] text-green-700 font-bold absolute right-1 bottom-1">局部变量区 (16B)</span>';
+            if(addr === 0xDFE0) sectionName = '<span class="text-[9px] text-orange-600 font-bold absolute right-1 bottom-1">入栈参数区 (16B)</span>';
+            if(addr === 0xDFC0) sectionName = '<span class="text-[9px] text-pink-700 font-bold absolute right-1 bottom-1">红区 Red Zone</span>';
+
+            if (data) {
+                contentBox.innerHTML = `<span class="font-bold text-sm block z-10">${data.val}</span><span class="text-[10px] font-bold opacity-80 block -mt-1 z-10">${data.label}</span>`;
+                
+                if (data.type === 'local') {
+                    contentBox.className = 'w-full h-full flex flex-col items-center justify-center font-mono transition-colors border-l-4 bg-green-100 text-green-900 border-green-500 relative';
+                } else if (data.type === 'arg') {
+                    contentBox.className = 'w-full h-full flex flex-col items-center justify-center font-mono transition-colors border-l-4 bg-orange-100 text-orange-900 border-orange-500 relative';
+                } else if (data.type === 'meta') {
+                    contentBox.className = 'w-full h-full flex flex-col items-center justify-center font-mono transition-colors border-l-4 bg-blue-100 text-blue-900 border-blue-500 relative';
+                } else if (data.type === 'redzone') {
+                    contentBox.className = 'w-full h-full flex flex-col items-center justify-center font-mono transition-colors border-l-4 bg-pink-100 text-pink-900 border-pink-500 relative';
+                }
+            } else {
+                if(addr === 0xE010) {
+                    contentBox.innerHTML = `<span>(Caller's Caller Data)</span>${sectionName}`;
+                    contentBox.className = 'w-full h-full flex flex-col items-center justify-center font-mono text-sm text-slate-500 bg-slate-200 transition-colors border-l-4 border-transparent relative';
+                } else if(addr === 0xE008 || addr === 0xDFD8) {
+                    contentBox.innerHTML = `<span>0x40... (返回地址)</span>`;
+                    contentBox.className = 'w-full h-full flex flex-col items-center justify-center font-mono text-sm text-slate-500 bg-slate-200 transition-colors border-l-4 border-transparent relative';
+                } else {
+                    // Make popped items look visually disabled unless it is Red Zone memory
+                    if (state.rsp > addr && !(addr <= 0xDFC8 && state.line >= 12 && state.line <= 17)) {
+                        contentBox.innerHTML = `<span>(失效内存/可被覆盖)</span>${sectionName}`;
+                        contentBox.className = 'w-full h-full flex flex-col items-center justify-center font-mono text-xs text-slate-300 bg-transparent transition-colors border-l-4 border-transparent relative opacity-60';
+                    } else {
+                        contentBox.innerHTML = `<span>? (未分配/可用)</span>${sectionName}`;
+                        contentBox.className = 'w-full h-full flex flex-col items-center justify-center font-mono text-sm text-slate-400 bg-transparent transition-colors border-l-4 border-transparent relative';
+                    }
+                }
+            }
+        });
+
+        ptrRsp.style.top = `${calculatePointerTop(state.rsp)}px`;
+        ptrRbp.style.top = `${calculatePointerTop(state.rbp)}px`;
+        
+        // Handle overlap
+        if (state.rsp === state.rbp) {
+            ptrRsp.style.transform = 'translateY(12px)';
+            ptrRbp.style.transform = 'translateY(-12px)';
+        } else {
+            ptrRsp.style.transform = 'translateY(0)';
+            ptrRbp.style.transform = 'translateY(0)';
+        }
+
+        document.getElementById('btn-prev').disabled = index === 0;
+        document.getElementById('btn-next').disabled = index === steps.length - 1;
+    }
+
+    document.getElementById('btn-prev').addEventListener('click', () => {
+        if (currentStepIndex > 0) { currentStepIndex--; renderStep(currentStepIndex); }
+    });
+    document.getElementById('btn-next').addEventListener('click', () => {
+        if (currentStepIndex < steps.length - 1) { currentStepIndex++; renderStep(currentStepIndex); }
+    });
+    document.getElementById('btn-reset').addEventListener('click', () => {
+        currentStepIndex = 0; renderStep(currentStepIndex);
+    });
+
+    initMemory();
+    setTimeout(() => renderStep(0), 100);
+</script>
+</body>
+</html>

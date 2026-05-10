@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>符号三角形回溯算法可视化</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f3f4f6; }
+        canvas { filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.1)); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // 核心算法：预计算所有回溯步骤用于可视化
+        function generateBacktrackingSteps(n) {
+            const steps = [];
+            const grid = Array.from({ length: n }, () => Array(n).fill(-1));
+            let count0 = 0; // '+' 的数量
+            let count1 = 0; // '-' 的数量
+            const total = (n * (n + 1)) / 2;
+            const half = total / 4; // 目标数量
+
+            // 深度拷贝二维数组辅助函数
+            const copyGrid = (g) => g.map(row => [...row]);
+
+            function backtrack(i) {
+                // 已经填满第一行，找到一个有效解
+                if (i === n) {
+                    steps.push({
+                        type: 'SOLUTION',
+                        grid: copyGrid(grid),
+                        count0, count1, i,
+                        message: `找到可行解！当前 '+' 数量：${count0}, '-' 数量：${count1}`
+                    });
+                    return;
+                }
+
+                // 尝试当前位置放置 0 ('+') 和 1 ('-')
+                for (let val = 0; val <= 1; val++) {
+                    grid[0][i] = val;
+                    val === 0 ? count0++ : count1++;
+                    
+                    const currentDiagonal = [[0, i]];
+
+                    // 根据第一行刚放入的元素，推导出一条向左下方的对角线
+                    for (let r = 1; r <= i; r++) {
+                        const c = i - r; // 对角线上的列索引
+                        // 异或推导
+                        grid[r][c] = grid[r - 1][c] ^ grid[r - 1][c + 1];
+                        grid[r][c] === 0 ? count0++ : count1++;
+                        currentDiagonal.push([r, c]);
+                    }
+
+                    // 记录尝试状态
+                    steps.push({
+                        type: 'TRYING',
+                        grid: copyGrid(grid),
+                        count0, count1, i, val,
+                        currentDiagonal,
+                        message: `推导第 ${i} 条对角线 (尝试第一行放置 ${val === 0 ? '+' : '-'})`
+                    });
+
+                    // 剪枝判断
+                    if (count0 <= half && count1 <= half) {
+                        // 继续深入
+                        backtrack(i + 1);
+                    } else {
+                        // 触发剪枝
+                        steps.push({
+                            type: 'PRUNED',
+                            grid: copyGrid(grid),
+                            count0, count1, i, val,
+                            currentDiagonal,
+                            message: `触发剪枝！${count0 > half ? '+' : '-'} 的数量(${Math.max(count0, count1)}) 超过了半数阈值(${half})。`
+                        });
+                    }
+
+                    // 回溯恢复现场
+                    for (const [r, c] of currentDiagonal) {
+                        grid[r][c] === 0 ? count0-- : count1--;
+                        grid[r][c] = -1;
+                    }
+                    
+                    steps.push({
+                        type: 'BACKTRACKING',
+                        grid: copyGrid(grid),
+                        count0, count1, i, val,
+                        message: `状态回退 (撤销第一行索引 ${i} 的尝试)`
+                    });
+                }
+            }
+
+            // 预先校验总体偶数要求
+            if (total % 2 !== 0) {
+                steps.push({
+                    type: 'ERROR',
+                    message: `n=${n} 时总数为 ${total}，为奇数，无解。`,
+                    grid: copyGrid(grid), count0: 0, count1: 0
+                });
+            } else {
+                backtrack(0);
+                steps.push({
+                    type: 'FINISHED',
+                    grid: copyGrid(grid), count0, count1,
+                    message: `探索完毕。`
+                });
+            }
+
+            return { steps, half };
+        }
+
+        const App = () => {
+            const [n, setN] = useState(7);
+            const [stepIndex, setStepIndex] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [speed, setSpeed] = useState(500);
+            const canvasRef = useRef(null);
+
+            // 预计算所有的回溯步骤
+            const { steps, half } = useMemo(() => generateBacktrackingSteps(n), [n]);
+
+            const currentStep = steps[stepIndex] || steps[0];
+
+            // 绘制 Canvas
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                const width = canvas.width;
+                const height = canvas.height;
+
+                // 清空画布
+                ctx.clearRect(0, 0, width, height);
+
+                if (!currentStep) return;
+
+                const { grid, currentDiagonal, type } = currentStep;
+                
+                // 计算绘制参数
+                const cellRadius = 14;
+                const xSpacing = 40;
+                const ySpacing = 35;
+                
+                // 使得整个三角形居中
+                const totalWidth = (n - 1) * xSpacing;
+                const startX = (width - totalWidth) / 2;
+                const startY = 80;
+
+                // 绘制网格连线 (展示推导关系)
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = '#e5e7eb';
+                for (let r = 0; r < n - 1; r++) {
+                    for (let c = 0; c < n - r - 1; c++) {
+                        const xTopLeft = startX + c * xSpacing + r * (xSpacing / 2);
+                        const yTop = startY + r * ySpacing;
+                        const xTopRight = xTopLeft + xSpacing;
+                        const xBottom = xTopLeft + xSpacing / 2;
+                        const yBottom = yTop + ySpacing;
+
+                        ctx.beginPath();
+                        ctx.moveTo(xTopLeft, yTop);
+                        ctx.lineTo(xBottom, yBottom);
+                        ctx.moveTo(xTopRight, yTop);
+                        ctx.lineTo(xBottom, yBottom);
+                        ctx.stroke();
+                    }
+                }
+
+                // 绘制节点
+                for (let r = 0; r < n; r++) {
+                    for (let c = 0; c < n - r; c++) {
+                        const val = grid[r][c];
+                        const x = startX + c * xSpacing + r * (xSpacing / 2);
+                        const y = startY + r * ySpacing;
+
+                        // 检查是否属于当前高亮的对角线
+                        let isHighlighted = false;
+                        if (currentDiagonal) {
+                            isHighlighted = currentDiagonal.some(([dr, dc]) => dr === r && dc === c);
+                        }
+
+                        // 绘制背景圆
+                        ctx.beginPath();
+                        ctx.arc(x, y, cellRadius, 0, Math.PI * 2);
+                        
+                        if (val === 0) {
+                            ctx.fillStyle = isHighlighted ? '#bfdbfe' : '#eff6ff'; // + (Blue)
+                            ctx.fill();
+                            ctx.strokeStyle = isHighlighted ? '#2563eb' : '#93c5fd';
+                        } else if (val === 1) {
+                            ctx.fillStyle = isHighlighted ? '#fecaca' : '#fef2f2'; // - (Red)
+                            ctx.fill();
+                            ctx.strokeStyle = isHighlighted ? '#dc2626' : '#fca5a5';
+                        } else {
+                            ctx.fillStyle = '#ffffff'; // 空白
+                            ctx.fill();
+                            ctx.strokeStyle = '#d1d5db';
+                        }
+                        
+                        // 剪枝时的特殊高亮
+                        if (type === 'PRUNED' && isHighlighted) {
+                            ctx.strokeStyle = '#ea580c';
+                            ctx.lineWidth = 3;
+                        } else if (type === 'SOLUTION') {
+                            ctx.strokeStyle = '#16a34a';
+                            ctx.lineWidth = 2;
+                        } else {
+                            ctx.lineWidth = isHighlighted ? 2 : 1;
+                        }
+                        ctx.stroke();
+
+                        // 绘制符号
+                        if (val !== -1) {
+                            ctx.fillStyle = val === 0 ? '#1d4ed8' : '#b91c1c';
+                            ctx.font = 'bold 20px monospace';
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillText(val === 0 ? '+' : '-', x, y);
+                        }
+                    }
+                }
+
+                // 绘制状态信息文本
+                ctx.fillStyle = '#111827';
+                ctx.font = '16px sans-serif';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+                ctx.fillText(`步数: ${stepIndex + 1} / ${steps.length}`, 20, 20);
+                
+                // 颜色指示
+                ctx.fillStyle = '#1d4ed8';
+                ctx.fillText(`'+' 数量: ${currentStep.count0} (目标: ${half})`, 20, 45);
+                ctx.fillStyle = '#b91c1c';
+                ctx.fillText(`'-' 数量: ${currentStep.count1} (目标: ${half})`, 220, 45);
+
+                // 状态指示器
+                ctx.textAlign = 'center';
+                ctx.font = 'bold 18px sans-serif';
+                let statusColor = '#374151';
+                if (type === 'PRUNED') statusColor = '#ea580c';
+                if (type === 'SOLUTION') statusColor = '#16a34a';
+                if (type === 'BACKTRACKING') statusColor = '#6b7280';
+                
+                ctx.fillStyle = statusColor;
+                ctx.fillText(currentStep.message, width / 2, height - 30);
+
+            }, [n, stepIndex, steps, currentStep, half]);
+
+            // 自动播放逻辑
+            useEffect(() => {
+                let timer;
+                if (isPlaying && stepIndex < steps.length - 1) {
+                    timer = setTimeout(() => {
+                        setStepIndex(prev => prev + 1);
+                    }, speed);
+                } else if (stepIndex >= steps.length - 1) {
+                    setIsPlaying(false);
+                }
+                return () => clearTimeout(timer);
+            }, [isPlaying, stepIndex, steps.length, speed]);
+
+            const handleNext = () => {
+                if (stepIndex < steps.length - 1) setStepIndex(prev => prev + 1);
+            };
+
+            const handlePrev = () => {
+                if (stepIndex > 0) setStepIndex(prev => prev - 1);
+            };
+
+            const handleNChange = (e) => {
+                setN(parseInt(e.target.value));
+                setStepIndex(0);
+                setIsPlaying(false);
+            };
+
+            return (
+                <div className="flex flex-col items-center min-h-screen py-10">
+                    <h1 className="text-3xl font-bold mb-6 text-gray-800">符号三角形回溯算法 (单步可视化)</h1>
+                    
+                    <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-4xl flex flex-col items-center">
+                        <div className="flex w-full justify-between items-center mb-6 px-4">
+                            <div className="flex items-center gap-3">
+                                <label className="font-semibold text-gray-700">第一行大小 (n):</label>
+                                <select 
+                                    className="border rounded p-1 px-2 bg-gray-50"
+                                    value={n} 
+                                    onChange={handleNChange}
+                                >
+                                    <option value={3}>n=3 (验证解)</option>
+                                    <option value={4}>n=4 (验证解)</option>
+                                    <option value={7}>n=7 (复杂回溯演示)</option>
+                                </select>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <span className="text-sm text-gray-500">播放速度:</span>
+                                <input 
+                                    type="range" min="50" max="1000" step="50" 
+                                    value={1050 - speed} 
+                                    onChange={(e) => setSpeed(1050 - parseInt(e.target.value))}
+                                    className="w-24"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="relative">
+                            <canvas 
+                                ref={canvasRef} 
+                                width={800} 
+                                height={420}
+                                className="bg-white border border-gray-200 rounded-lg"
+                            ></canvas>
+                        </div>
+
+                        <div className="flex gap-4 mt-8">
+                            <button 
+                                onClick={() => { setStepIndex(0); setIsPlaying(false); }}
+                                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded font-medium transition"
+                            >
+                                重置
+                            </button>
+                            <button 
+                                onClick={handlePrev} disabled={stepIndex === 0}
+                                className="px-4 py-2 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded font-medium disabled:opacity-50 transition"
+                            >
+                                上一步
+                            </button>
+                            <button 
+                                onClick={() => setIsPlaying(!isPlaying)}
+                                className={`px-6 py-2 rounded font-bold text-white transition ${isPlaying ? 'bg-amber-500 hover:bg-amber-600' : 'bg-green-500 hover:bg-green-600'}`}
+                            >
+                                {isPlaying ? '暂停' : '自动播放'}
+                            </button>
+                            <button 
+                                onClick={handleNext} disabled={stepIndex === steps.length - 1}
+                                className="px-4 py-2 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded font-medium disabled:opacity-50 transition"
+                            >
+                                下一步
+                            </button>
+                        </div>
+                        
+                        <div className="mt-6 text-sm text-gray-600 max-w-2xl">
+                            <p><strong>执行日志解析：</strong></p>
+                            <ul className="list-disc pl-5 mt-2 space-y-1">
+                                <li><strong>蓝色路径</strong>：当前正在尝试添加符号，并沿着对角线异或推导至底部。</li>
+                                <li><strong>红色高亮边框</strong>：触发<span className="font-semibold text-orange-600">剪枝</span>条件。意味着在此状态下，某一种符号的数量已经超过了三角形总符号数的一半，后续无论如何填充都不可能平衡，立即舍弃该分支。</li>
+                                <li><strong>回退（Backtracking）</strong>：从数组中抹除刚刚尝试的对角线元素，并撤销计数。</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

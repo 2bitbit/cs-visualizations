@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BLIS架构：非对称 GEMM 内存层级深度可视化</title>
+    
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 引入 KaTeX 用于渲染 LaTeX 数学公式 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+    
+    <style>
+        body { background-color: #020617; color: #f8fafc; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; overflow-x: hidden; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        
+        .fixed-panel-height { min-height: 680px; }
+        
+        .glow-green { box-shadow: 0 0 10px #10b981, inset 0 0 5px #10b981; }
+        .glow-purple { box-shadow: 0 0 10px #a855f7, inset 0 0 5px #a855f7; }
+        .glow-orange { box-shadow: 0 0 15px #f97316, inset 0 0 8px #ea580c; }
+        .glow-cyan { box-shadow: 0 0 12px #06b6d4, inset 0 0 6px #06b6d4; }
+        
+        /* Loop indicator animations */
+        .loop-active { border-left: 4px solid #10b981; background-color: rgba(16, 185, 129, 0.1); }
+        .loop-inactive { border-left: 4px solid #334155; opacity: 0.5; }
+
+        .katex { font-size: 1.1em; }
+        
+        /* 流经动画专用 */
+        @keyframes stream-through {
+            0% { transform: translateY(-10px); opacity: 0; }
+            50% { transform: translateY(0); opacity: 1; }
+            100% { transform: translateY(10px); opacity: 0; }
+        }
+        .animate-stream { animation: stream-through 0.3s ease-out; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const TeX = ({ math, inline = true, className = "" }) => {
+            if (!window.katex) return <span className={className}>{math}</span>;
+            try {
+                const html = katex.renderToString(math, { throwOnError: false, displayMode: !inline });
+                return <span className={className} dangerouslySetInnerHTML={{ __html: html }} />;
+            } catch (e) {
+                return <span className={className}>{math}</span>;
+            }
+        };
+
+        const M = 8, K = 4, N = 10;
+        const Mc = 4, Kc = 2, Nc = 8;
+        const Mr = 2, Nr = 2;
+
+        const matrixA = [
+            [3, 1, 4, 2], [1, 5, 2, 3], [4, 2, 1, 5], [2, 3, 5, 1],
+            [5, 4, 3, 2], [1, 2, 4, 5], [3, 5, 1, 4], [2, 1, 3, 2]
+        ];
+        const matrixB = [
+            [1, 4, 2, 5, 3, 1, 4, 2, 5, 3],
+            [3, 2, 5, 1, 4, 2, 1, 3, 2, 4],
+            [2, 5, 1, 3, 2, 4, 3, 1, 5, 2],
+            [5, 1, 4, 2, 5, 3, 2, 5, 1, 4]
+        ];
+
+        const generatePhases = () => {
+            const phases = [{ 
+                type: 'INIT', activeLoop: 5, 
+                msg: <span>初始状态。定义全局矩阵 <TeX math="A, B" /> 和主存中的目标矩阵 <TeX math="C" />。</span> 
+            }];
+            
+            for (let jc = 0; jc < N; jc += Nc) { // 5th loop
+                let currentNc = Math.min(Nc, N - jc); 
+                phases.push({ 
+                    type: 'LOOP5', jc, activeLoop: 5, 
+                    msg: <span>【5th Loop】沿 <TeX math="N" /> 维度切分。切出 <TeX math="B" /> 的宏面板 (Macro-panel) 和 <TeX math="C" /> 的目标宏瓦片。</span> 
+                });
+                
+                for (let pc = 0; pc < K; pc += Kc) { // 4th loop
+                    phases.push({ 
+                        type: 'PACK', jc, pc, activeLoop: 4, 
+                        msg: <span>【4th Loop】沿 <TeX math="K" /> 维度切断。取出 <TeX math="B" /> 宏面板的一段，打包(Pack)为物理连续的宏块 (Macro-block) <TeX math="\tilde{B}" />，并长久驻留 L3 缓存。</span> 
+                    });
+                    
+                    for (let ic = 0; ic < M; ic += Mc) { // 3rd loop
+                        phases.push({ 
+                            type: 'LOOP3', jc, pc, ic, activeLoop: 3, 
+                            msg: <span>【3rd Loop】沿 <TeX math="M" /> 维度切断。从 <TeX math="A" /> 切出数据并打包为物理连续的宏块 (Macro-block) <TeX math="\tilde{A}" />，送入并驻留 L2 缓存。</span> 
+                        });
+                        
+                        // 2nd loop: L1 驻留 B 面板
+                        for (let jr = 0; jr < currentNc; jr += Nr) { 
+                            // 1st loop: 遍历 A 微块
+                            for (let ir = 0; ir < Mc; ir += Mr) { 
+                                // 0th loop: Micro-kernel 外积
+                                for (let k = 0; k < Kc; k++) {
+                                    phases.push({ 
+                                        type: 'COMPUTE', jc, pc, ic, jr, ir, k_micro: k, activeLoop: 0, 
+                                        msg: <span>【微内核 FMA】<TeX math="B" /> 的微面板 <TeX math="B_r" /> 稳固驻留 L1；<TeX math="A" /> 的微面板 <TeX math="A_r" /> 被拆分为小列向量，快速流经 L1 进入寄存器。执行行列向量外积，累加求和至微瓦片 <TeX math="C_{micro}" />。</span> 
+                                    });
+                                }
+                                phases.push({ 
+                                    type: 'WRITEBACK', jc, pc, ic, jr, ir, activeLoop: 1, 
+                                    msg: <span>【微瓦片拼图】内层 <TeX math="K" /> 循环结束。寄存器中的一个完整微瓦片 (Micro-tile) 计算完毕，将其在空间上拼接写回至主存 <TeX math="C" /> 矩阵的相应区域。</span> 
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            return phases;
+        };
+
+        const GEMMHierarchyVisualizer = () => {
+            const [step, setStep] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [speed, setSpeed] = useState(1500);
+
+            const phasesArray = useMemo(() => generatePhases(), []);
+            const MAX_STEPS = phasesArray.length - 1;
+
+            useEffect(() => {
+                let timer;
+                if (isPlaying && step < MAX_STEPS) {
+                    timer = setTimeout(() => setStep(s => s + 1), speed);
+                } else if (step >= MAX_STEPS) {
+                    setIsPlaying(false);
+                }
+                return () => clearTimeout(timer);
+            }, [isPlaying, step, speed]);
+
+            const phase = phasesArray[step];
+
+            const getMemoryC = () => {
+                let memC = Array(M).fill(0).map(() => Array(N).fill(0));
+                for (let s = 1; s <= step; s++) {
+                    const p = phasesArray[s];
+                    if (p.type === 'WRITEBACK') {
+                        for (let r = 0; r < Mr; r++) {
+                            for (let c = 0; c < Nr; c++) {
+                                let sum = 0;
+                                for (let tk = 0; tk < Kc; tk++) {
+                                    sum += matrixA[p.ic + p.ir + r][p.pc + tk] * matrixB[p.pc + tk][p.jc + p.jr + c];
+                                }
+                                memC[p.ic + p.ir + r][p.jc + p.jr + c] += sum;
+                            }
+                        }
+                    }
+                }
+                return memC;
+            };
+            const currentMemC = getMemoryC();
+
+            const getAccumulators = () => {
+                let acc = Array(Mr).fill(0).map(() => Array(Nr).fill(0));
+                if (phase.type !== 'COMPUTE' && phase.type !== 'WRITEBACK') return acc;
+                
+                let limit = phase.type === 'WRITEBACK' ? Kc : phase.k_micro + 1;
+                for (let r = 0; r < Mr; r++) {
+                    for (let c = 0; c < Nr; c++) {
+                        for (let tk = 0; tk < limit; tk++) {
+                            acc[r][c] += matrixA[phase.ic + phase.ir + r][phase.pc + tk] * matrixB[phase.pc + tk][phase.jc + phase.jr + c];
+                        }
+                    }
+                }
+                return acc;
+            };
+            const accumulators = getAccumulators();
+
+            const renderMainMemory = () => (
+                <div className="bg-slate-800 p-5 rounded-xl border-2 border-slate-600 fixed-panel-height flex flex-col relative z-0 shadow-2xl">
+                    {(phase.type === 'PACK' || phase.type === 'LOOP3') && (
+                        <>
+                            <div className="absolute top-[20%] -right-4 w-4 h-1 bg-green-500 animate-pulse"></div>
+                            <div className="absolute top-[45%] -right-4 w-4 h-1 bg-purple-500 animate-pulse"></div>
+                        </>
+                    )}
+
+                    <div className="border-b border-slate-600 pb-3 mb-4">
+                        <h2 className="text-xl font-bold text-slate-200 flex items-center">
+                            <span className="bg-slate-700 p-1.5 rounded mr-2"><svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg></span>
+                            主存 (Main Memory)
+                        </h2>
+                    </div>
+
+                    {/* Matrix A in Memory */}
+                    <div className="mb-4 relative">
+                        <div className="text-green-400 font-bold text-sm mb-1 flex justify-between">
+                            <TeX math={`\\text{全局矩阵 } A \\in \\mathbb{R}^{${M} \\times ${K}}`} />
+                            {phase.type !== 'INIT' && phase.type !== 'LOOP5' && phase.pc !== undefined && 
+                                <span className="text-xs text-green-300"><TeX math={`\\rightarrow \\text{宏面板 } A_p`} /></span>
+                            }
+                        </div>
+                        <div className={`grid grid-cols-4 gap-0.5 p-1 bg-slate-900 rounded border border-slate-700 relative ${phase.type === 'LOOP3' ? 'glow-green' : ''}`}>
+                            {/* 4th Loop: Ap 宏面板 (固定不动) */}
+                            {(phase.pc !== undefined) && (
+                                <div className="absolute border-2 border-dashed border-slate-500 bg-slate-600/10 transition-all duration-500 pointer-events-none z-10" 
+                                     style={{ 
+                                         top: '0%', height: '100%',
+                                         left: `${(phase.pc / K) * 100}%`, width: `${(Kc / K) * 100}%` 
+                                     }}></div>
+                            )}
+                            {/* Ai 宏块 (在 Ap 内部滑动) */}
+                            {(phase.ic !== undefined && phase.pc !== undefined) && (
+                                <div className="absolute border-2 border-solid border-green-400 shadow-[0_0_10px_#4ade80] bg-green-500/20 transition-all duration-500 pointer-events-none z-20" 
+                                     style={{ 
+                                         top: `${(phase.ic / M) * 100}%`, height: `${(Mc / M) * 100}%`,
+                                         left: `${(phase.pc / K) * 100}%`, width: `${(Kc / K) * 100}%` 
+                                     }}></div>
+                            )}
+                            {matrixA.map((row, i) => row.map((val, k) => {
+                                let isTarget = phase.type !== 'INIT' && phase.type !== 'LOOP5' && phase.pc !== undefined && k >= phase.pc && k < phase.pc + Kc && i >= phase.ic && i < phase.ic + Mc;
+                                return (
+                                    <div key={`A-${i}-${k}`} className={`h-6 flex justify-center items-center rounded-sm text-xs font-mono transition-colors relative z-30
+                                        ${isTarget ? 'bg-green-900/60 text-green-300 font-bold' : 'bg-slate-800 text-slate-500'}`}>
+                                        {val}
+                                    </div>
+                                );
+                            }))}
+                        </div>
+                    </div>
+
+                    {/* Matrix B in Memory */}
+                    <div className="mb-4 relative">
+                        <div className="text-purple-400 font-bold text-sm mb-1 flex justify-between">
+                            <TeX math={`\\text{全局矩阵 } B \\in \\mathbb{R}^{${K} \\times ${N}}`} />
+                            {phase.type !== 'INIT' && 
+                                <span className="text-xs text-purple-300"><TeX math={`\\rightarrow \\text{宏面板 } B_j`} /></span>
+                            }
+                        </div>
+                        <div className={`grid grid-cols-10 gap-0.5 p-1 bg-slate-900 rounded border border-slate-700 relative ${phase.type === 'PACK' ? 'glow-purple' : ''}`}>
+                            {/* Bj 宏面板 (固定不动) */}
+                            {(phase.jc !== undefined) && (
+                                <div className="absolute border-2 border-dashed border-slate-500 bg-slate-600/10 transition-all duration-500 pointer-events-none z-10" 
+                                     style={{ 
+                                         top: '0%', height: '100%', left: `${(phase.jc / N) * 100}%`, width: `${(Math.min(Nc, N - phase.jc) / N) * 100}%` 
+                                     }}></div>
+                            )}
+                            {/* Bp 行块/宏块基础 (滑动) */}
+                            {(phase.pc !== undefined && phase.jc !== undefined) && (
+                                <div className="absolute border-2 border-solid border-purple-400 shadow-[0_0_10px_#c084fc] bg-purple-500/20 transition-all duration-500 pointer-events-none z-20" 
+                                     style={{ 
+                                         top: `${(phase.pc / K) * 100}%`, height: `${(Kc / K) * 100}%`,
+                                         left: `${(phase.jc / N) * 100}%`, width: `${(Math.min(Nc, N - phase.jc) / N) * 100}%` 
+                                     }}></div>
+                            )}
+                            {matrixB.map((row, k) => row.map((val, j) => {
+                                let isTarget = phase.type !== 'INIT' && phase.type !== 'LOOP5' && phase.pc !== undefined && phase.jc !== undefined && k >= phase.pc && k < phase.pc + Kc && j >= phase.jc && j < phase.jc + Math.min(Nc, N - phase.jc);
+                                return (
+                                    <div key={`B-${k}-${j}`} className={`h-6 flex justify-center items-center rounded-sm text-xs font-mono transition-colors relative z-30
+                                        ${isTarget ? 'bg-purple-900/60 text-purple-300 font-bold' : 'bg-slate-800 text-slate-500'}`}>
+                                        {val}
+                                    </div>
+                                );
+                            }))}
+                        </div>
+                    </div>
+
+                    {/* Matrix C in Memory */}
+                    <div className="mt-auto border-t border-slate-700 pt-4 relative">
+                        <div className="text-orange-400 font-bold text-sm mb-1 flex justify-between">
+                            <TeX math={`\\text{主存矩阵 } C \\in \\mathbb{R}^{${M} \\times ${N}}`} />
+                            <span className="text-xs text-orange-300"><TeX math={`\\text{宏瓦片区域更新}`} /></span>
+                        </div>
+                        <div className="grid grid-cols-10 gap-1 p-2 bg-slate-900 rounded border border-slate-700 relative">
+                            {/* Cj 宏瓦片边界 */}
+                            {(phase.jc !== undefined) && (
+                                <div className="absolute top-0 bottom-0 border-2 border-dashed border-slate-500 bg-slate-600/10 transition-all duration-500 pointer-events-none z-10" 
+                                     style={{ left: `${(phase.jc / N) * 100}%`, width: `${(Math.min(Nc, N - phase.jc) / N) * 100}%` }}></div>
+                            )}
+                            {currentMemC.map((row, i) => row.map((val, j) => {
+                                let isWriting = phase.type === 'WRITEBACK' && i >= phase.ic + phase.ir && i < phase.ic + phase.ir + Mr && j >= phase.jc + phase.jr && j < phase.jc + phase.jr + Nr;
+                                return (
+                                    <div key={`C-${i}-${j}`} className={`h-7 flex justify-center items-center rounded text-xs font-mono font-bold transition-colors relative z-30
+                                        ${isWriting ? 'bg-orange-500 text-white glow-orange scale-110 z-10' : val !== 0 ? 'bg-orange-900/80 text-orange-200' : 'bg-slate-800 text-slate-600'}`}>
+                                        {val === 0 ? '-' : val}
+                                    </div>
+                                );
+                            }))}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const renderCacheMemory = () => {
+                let cacheA = Array(Mc).fill(0).map(() => Array(Kc).fill('-'));
+                let cacheB = Array(Kc).fill(0).map(() => Array(Nc).fill('-'));
+                let l1MicroPanelB = Array(Kc).fill(0).map(() => Array(Nr).fill('-'));
+                let l1TransientA = Array(Mr).fill('-');
+
+                if (phase.ic !== undefined && phase.pc !== undefined) {
+                    for(let i=0; i<Mc; i++) for(let k=0; k<Kc; k++) cacheA[i][k] = matrixA[phase.ic + i][phase.pc + k];
+                    let currentNc = Math.min(Nc, N - phase.jc);
+                    for(let k=0; k<Kc; k++) for(let j=0; j<currentNc; j++) cacheB[k][j] = matrixB[phase.pc + k][phase.jc + j];
+                }
+
+                if (phase.jr !== undefined && phase.pc !== undefined) {
+                    for(let k=0; k<Kc; k++) {
+                        for(let c=0; c<Nr; c++) {
+                            l1MicroPanelB[k][c] = matrixB[phase.pc + k][phase.jc + phase.jr + c];
+                        }
+                    }
+                }
+                
+                if (phase.type === 'COMPUTE' && phase.pc !== undefined) {
+                    for(let i=0; i<Mr; i++) {
+                        l1TransientA[i] = matrixA[phase.ic + phase.ir + i][phase.pc + phase.k_micro];
+                    }
+                }
+
+                return (
+                    <div className="bg-slate-800 p-5 rounded-xl border-2 border-slate-600 fixed-panel-height flex flex-col relative z-10 shadow-2xl">
+                        {(phase.type === 'PACK' || phase.type === 'LOOP3') && (
+                            <>
+                                <div className="absolute top-[20%] -left-4 w-4 h-1 bg-green-500"></div>
+                                <div className="absolute top-[45%] -left-4 w-4 h-1 bg-purple-500"></div>
+                            </>
+                        )}
+                        {phase.type === 'COMPUTE' && (
+                            <>
+                                <div className="absolute bottom-[10%] -right-4 w-4 h-1 bg-cyan-500 animate-pulse"></div>
+                                <div className="absolute bottom-[20%] -right-4 w-4 h-1 bg-green-500 animate-pulse"></div>
+                            </>
+                        )}
+
+                        <div className="border-b border-slate-600 pb-3 mb-4">
+                            <h2 className="text-xl font-bold text-slate-200 flex items-center">
+                                <span className="bg-indigo-600 p-1.5 rounded mr-2 shadow-[0_0_10px_#4f46e5]">⚡</span>
+                                高速缓存 (Hierarchy)
+                            </h2>
+                        </div>
+
+                        {/* L2 Cache */}
+                        <div className={`mb-4 relative ${phase.type === 'LOOP3' ? 'glow-green' : ''}`}>
+                            <div className="flex justify-between items-end mb-1">
+                                <span className="text-green-400 font-bold text-sm">
+                                    <TeX math={`\\text{L2 (驻留): 宏块 } \\tilde{A} \\in \\mathbb{R}^{m_c \\times k_c}`} />
+                                </span>
+                                {phase.ir !== undefined && (
+                                    <span className="text-[10px] text-green-300 border border-green-500/50 bg-green-900/50 px-1.5 py-0.5 rounded shadow-sm">虚线框: 切出微面板 <TeX math="A_r" /> (<TeX math="m_R" /> 对齐 VReg 长度)</span>
+                                )}
+                            </div>
+                            <div className="p-2 bg-slate-900 rounded border border-green-800">
+                                <div className="grid grid-cols-2 gap-1 relative overflow-hidden">
+                                    {/* L2 切分出微面板 完美对齐网格 */}
+                                    {phase.ir !== undefined && (
+                                        <div className="absolute left-[-2px] right-[-2px] border-2 border-dashed border-green-400 bg-green-500/20 shadow-[0_0_8px_#4ade80] transition-all duration-300 pointer-events-none z-20 rounded-sm" 
+                                             style={{ top: `${(phase.ir / Mc) * 100}%`, height: `${(Mr / Mc) * 100}%` }}>
+                                        </div>
+                                    )}
+                                    {cacheA.map((row, i) => row.map((val, k) => {
+                                        let isReading = phase.type === 'COMPUTE' && i >= phase.ir && i < phase.ir + Mr && k === phase.k_micro;
+                                        return (
+                                            <div key={`L2-${i}-${k}`} className={`h-7 flex justify-center items-center rounded text-xs font-mono font-bold transition-all duration-200 relative z-10
+                                                ${isReading ? 'bg-green-500 text-white shadow-[0_0_8px_#10b981] scale-110' : val !== '-' ? 'bg-green-900 text-green-300' : 'bg-slate-800 text-slate-600'}`}>
+                                                {val}
+                                            </div>
+                                        );
+                                    }))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* L3 Cache */}
+                        <div className={`mb-4 relative ${phase.type === 'PACK' ? 'glow-purple' : ''}`}>
+                            <div className="flex justify-between items-end mb-1">
+                                <span className="text-purple-400 font-bold text-sm">
+                                    <TeX math={`\\text{L3 (驻留): 宏块 } \\tilde{B} \\in \\mathbb{R}^{k_c \\times n_c}`} />
+                                </span>
+                                {phase.jr !== undefined && (
+                                    <span className="text-[10px] text-cyan-300 border border-cyan-500/50 bg-cyan-900/50 px-1.5 py-0.5 rounded shadow-sm">虚线框: 切出微面板 <TeX math="B_r" /> (<TeX math="n_R" /> 对齐 VReg 长度)</span>
+                                )}
+                            </div>
+                            <div className="p-2 bg-slate-900 rounded border border-purple-800">
+                                <div className="grid grid-cols-8 gap-1 relative overflow-hidden">
+                                    {/* L3 切分出微面板 完美对齐网格 */}
+                                    {phase.jr !== undefined && (
+                                        <div className="absolute top-[-2px] bottom-[-2px] border-2 border-dashed border-cyan-400 bg-cyan-500/20 shadow-[0_0_8px_#22d3ee] transition-all duration-300 pointer-events-none z-20 rounded-sm" 
+                                             style={{ left: `${(phase.jr / Nc) * 100}%`, width: `${(Nr / Nc) * 100}%` }}>
+                                        </div>
+                                    )}
+                                    {cacheB.map((row, k) => row.map((val, j) => {
+                                        let isReading = phase.type === 'COMPUTE' && j >= phase.jr && j < phase.jr + Nr && k === phase.k_micro;
+                                        return (
+                                            <div key={`L3-${k}-${j}`} className={`h-7 flex justify-center items-center rounded text-xs font-mono font-bold transition-all duration-200 relative z-10
+                                                ${isReading ? 'bg-purple-500 text-white shadow-[0_0_8px_#a855f7]' : val !== '-' ? 'bg-purple-900 text-purple-300' : 'bg-slate-800 text-slate-600'}`}>
+                                                {val}
+                                            </div>
+                                        );
+                                    }))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* L1 Cache (分区域展示驻留与流经) */}
+                        <div className="mt-auto border-t border-slate-700 pt-4 relative">
+                            <div className="flex justify-between items-center mb-2">
+                                <span className="text-slate-200 font-bold text-sm">L1 Data Cache 物理行为</span>
+                            </div>
+                            
+                            <div className="flex space-x-4 h-[120px]">
+                                {/* 流经区 A */}
+                                <div className="w-32 bg-slate-950 p-2 rounded-lg border border-green-800/50 flex flex-col items-center">
+                                    <div className="text-[10px] text-green-400 mb-2 font-bold whitespace-nowrap text-center">
+                                        【快速流经区】<br/><TeX math={`\\text{A列向量}`} />
+                                    </div>
+                                    <div className="flex flex-col gap-1 relative z-10 w-8">
+                                        {l1TransientA.map((val, i) => {
+                                            let isReading = phase.type === 'COMPUTE' && val !== '-';
+                                            return (
+                                                <div key={`L1-A-${i}`} className={`h-6 flex justify-center items-center rounded text-[10px] font-mono font-bold
+                                                    ${isReading ? 'bg-green-500 text-white shadow-[0_0_8px_#10b981] animate-stream' : 'bg-slate-800 text-slate-600 border border-slate-700'}`}>
+                                                    {val}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                                
+                                {/* 驻留区 B */}
+                                <div className="flex-1 bg-slate-950 p-2 rounded-lg border border-cyan-800/50 flex flex-col items-center">
+                                    <div className="text-[10px] text-cyan-400 mb-2 font-bold whitespace-nowrap text-center">
+                                        【长久驻留区】<br/><TeX math={`\\text{B微面板 } B_r \\in \\mathbb{R}^{k_c \\times n_R}`} />
+                                    </div>
+                                    <div className={`grid grid-cols-${Nr} gap-1 relative z-10 w-20 flex-1`}>
+                                        {/* L1 提取行动画 完美对齐网格 */}
+                                        {phase.type === 'COMPUTE' && (
+                                            <div className="absolute left-[-4px] right-[-4px] border-2 border-dashed border-cyan-400 bg-cyan-500/20 shadow-[0_0_8px_#22d3ee] transition-all duration-300 pointer-events-none z-20 rounded-sm" 
+                                                 style={{ top: `${(phase.k_micro / Kc) * 100}%`, height: `${(1 / Kc) * 100}%` }}>
+                                            </div>
+                                        )}
+                                        {l1MicroPanelB.map((row, k) => row.map((val, c) => {
+                                            let isReading = phase.type === 'COMPUTE' && k === phase.k_micro;
+                                            return (
+                                                <div key={`L1-B-${k}-${c}`} className={`h-6 flex justify-center items-center rounded text-[10px] font-mono font-bold transition-all duration-200 relative z-10
+                                                    ${isReading ? 'bg-cyan-500 text-slate-900 glow-cyan scale-110' : val !== '-' ? 'bg-cyan-900 text-cyan-200 border border-cyan-700' : 'bg-slate-800 text-slate-600'}`}>
+                                                    {val}
+                                                </div>
+                                            );
+                                        }))}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderCPUCore = () => {
+                let vregA = Array(Mr).fill('-'); 
+                let vregB = Array(Nr).fill('-'); 
+                
+                if (phase.type === 'COMPUTE' || phase.type === 'WRITEBACK') {
+                    let km = phase.pc + (phase.k_micro || 0);
+                    for(let i=0; i<Mr; i++) vregA[i] = matrixA[phase.ic + phase.ir + i][km];
+                    for(let j=0; j<Nr; j++) vregB[j] = matrixB[km][phase.jc + phase.jr + j];
+                }
+
+                return (
+                    <div className="bg-slate-800 p-5 rounded-xl border border-rose-500/30 fixed-panel-height flex flex-col relative z-20 shadow-[0_0_30px_rgba(225,29,72,0.1)] overflow-hidden">
+                        {phase.type === 'WRITEBACK' && (
+                            <div className="absolute top-[80%] -left-12 flex items-center animate-pulse z-30">
+                                <span className="bg-orange-600 text-white text-xs font-bold px-3 py-1 rounded-l-full shadow-lg border border-orange-400">⟵ 空间拼接回主存</span>
+                            </div>
+                        )}
+
+                        <div className="border-b border-slate-700 pb-3 mb-6 relative z-10">
+                            <h2 className="text-xl font-bold text-rose-300 flex items-center">
+                                <span className="bg-rose-900 p-1.5 rounded mr-3">⚙️</span>
+                                CPU VReg / 计算单元
+                            </h2>
+                        </div>
+
+                        <div className="flex flex-col items-center flex-1 relative z-10 w-full mt-4">
+                            <div className="w-full flex justify-center mb-8 relative">
+                                <div className="absolute -top-6 text-xs font-bold text-purple-400 bg-purple-900/40 px-3 py-0.5 rounded border border-purple-800">
+                                    <TeX math={`\\text{小行向量 } \\quad (\\text{来自 } B_r)`} />
+                                </div>
+                                <div className="flex space-x-3 bg-slate-900/50 p-2 rounded-lg border-t-2 border-purple-500">
+                                    {vregB.map((v, i) => (
+                                        <div key={`vb-${i}`} className={`w-14 h-14 flex justify-center items-center rounded-lg text-2xl font-mono font-black
+                                            ${phase.type === 'COMPUTE' ? 'bg-cyan-500 text-slate-900 shadow-[0_0_15px_#06b6d4] border border-cyan-400 scale-110' : 'bg-slate-800 text-slate-600 border border-slate-700'}`}>
+                                            {v}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="flex w-full justify-center">
+                                <div className="flex flex-col space-y-3 mr-6 bg-slate-900/50 p-2 rounded-lg border-l-2 border-green-500 relative mt-2">
+                                    <div className="absolute -left-10 top-1/2 -translate-y-1/2 -rotate-90 text-xs font-bold text-green-400 whitespace-nowrap tracking-widest">
+                                        <TeX math={`\\text{小列向量}`} />
+                                    </div>
+                                    {vregA.map((v, i) => (
+                                        <div key={`va-${i}`} className={`w-14 h-14 flex justify-center items-center rounded-lg text-2xl font-mono font-black
+                                            ${phase.type === 'COMPUTE' ? 'bg-green-600 text-white shadow-[0_0_15px_#16a34a] border border-green-400 scale-110' : 'bg-slate-800 text-slate-600 border border-slate-700'}`}>
+                                            {v}
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className="bg-slate-950 p-3 rounded-xl border border-orange-800/60 relative flex-1">
+                                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-slate-950 px-2 text-xs font-bold text-orange-400 border border-orange-800 rounded whitespace-nowrap">
+                                        <TeX math={`\\text{微瓦片 } C_{micro} \\in \\mathbb{R}^{m_R \\times n_R}`} />
+                                    </div>
+                                    
+                                    {phase.type === 'COMPUTE' && (
+                                        <div className="absolute inset-0 bg-gradient-to-br from-green-500/10 to-cyan-500/10 pointer-events-none rounded-xl"></div>
+                                    )}
+
+                                    <div className={`grid grid-cols-${Nr} gap-3 h-full mt-2`}>
+                                        {accumulators.map((row, i) => row.map((val, j) => {
+                                            let isHighlight = phase.type === 'COMPUTE' || phase.type === 'WRITEBACK';
+                                            let eqn = "";
+                                            if (phase.type === 'COMPUTE') eqn = `+ ${vregA[i]} \\times ${vregB[j]}`;
+
+                                            return (
+                                                <div key={`acc-${i}-${j}`} className={`h-20 flex flex-col justify-center items-center rounded-xl font-mono transition-all duration-300 relative
+                                                    ${isHighlight ? 'bg-orange-600 text-white shadow-lg border border-orange-400' : 'bg-slate-800 text-orange-900 border border-slate-700'}`}>
+                                                    <span className="text-2xl font-black">{val}</span>
+                                                    {isHighlight && <span className="absolute bottom-1 text-[10px] text-orange-200 font-bold bg-orange-800/50 px-1 rounded"><TeX math={eqn} /></span>}
+                                                </div>
+                                            );
+                                        }))}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div className="mt-8 bg-rose-950/50 border border-rose-800 px-4 py-2 rounded-full flex flex-col items-center space-y-1">
+                                <div className="flex items-center space-x-2">
+                                    <span className={`w-3 h-3 rounded-full ${phase.type === 'COMPUTE' ? 'bg-rose-500 animate-pulse shadow-[0_0_8px_#f43f5e]' : 'bg-rose-900'}`}></span>
+                                    <span className="text-xs text-rose-300 font-mono font-bold tracking-wider">
+                                        <TeX math={`\\text{外积累加: } C_{micro} \\mathrel{{+}{=}} A_{col} \\times B_{row}`} />
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const loopTracker = [
+                { id: 5, name: <span>5th Loop (宏观分列 <TeX math="n_c" />)</span>, desc: <span>切出 <TeX math="B" /> 宏面板与 <TeX math="C" /> 宏瓦片</span>, target: <span>主存 <TeX math="\rightarrow" /> L3预备</span>, status: phase.activeLoop === 5 ? 'active' : (phase.activeLoop < 5 ? 'done' : 'pending') },
+                { id: 4, name: <span>4th Loop (宏观分层 <TeX math="k_c" />)</span>, desc: <span>打包 <TeX math="B" /> 宏面板为物理连续块</span>, target: <span>宏块 <TeX math="\tilde{B}" /> 驻留 L3</span>, status: phase.activeLoop === 4 ? 'active' : (phase.activeLoop < 4 ? 'done' : 'pending') },
+                { id: 3, name: <span>3rd Loop (宏观分行 <TeX math="m_c" />)</span>, desc: <span>打包 <TeX math="A" /> 数据为物理连续块</span>, target: <span>宏块 <TeX math="\tilde{A}" /> 驻留 L2</span>, status: phase.activeLoop === 3 ? 'active' : (phase.activeLoop < 3 ? 'done' : 'pending') }, 
+                { id: 2, name: <span>2nd Loop (微观分列 <TeX math="n_R" />)</span>, desc: <span>从 L3 宏块切出微面板 <TeX math="B_r" /></span>, target: <span>长久驻留 L1</span>, status: phase.type === 'COMPUTE' ? 'done' : (phase.activeLoop === 2 ? 'active' : 'pending') },
+                { id: 1, name: <span>1st Loop (微观分行 <TeX math="m_R" />)</span>, desc: <span>从 L2 宏块切出微面板 <TeX math="A_r" /></span>, target: <span>流经 L1 <TeX math="\rightarrow" /> 目标VReg</span>, status: phase.activeLoop === 1 ? 'active' : (phase.type === 'COMPUTE' ? 'done' : 'pending') },
+                { id: 0, name: <span>0th Loop (最内层 FMA)</span>, desc: <span>提取小列向量与小行向量</span>, target: <span>外积累加 <TeX math="\rightarrow" /> 微瓦片</span>, status: phase.type === 'COMPUTE' ? 'active' : 'pending' }
+            ];
+
+            return (
+                <div className="min-h-screen p-4 md:p-6 flex flex-col max-w-[1700px] mx-auto overflow-hidden">
+                    
+                    <header className="mb-6 flex flex-col md:flex-row justify-between items-center gap-4 bg-slate-800/80 backdrop-blur-sm p-6 rounded-2xl border border-slate-700 shadow-xl">
+                        <div>
+                            <h1 className="text-2xl md:text-3xl font-black text-white tracking-tight flex items-center">
+                                BLIS GEMM <span className="ml-3 px-3 py-1 bg-gradient-to-r from-indigo-500 to-rose-500 rounded-lg text-sm uppercase tracking-widest text-white shadow-lg">Memory Hierarchy</span>
+                            </h1>
+                            <p className="text-slate-400 mt-2 text-sm">严格遵循数学准则：大写表示矩阵与块，小写表示标量维度</p>
+                        </div>
+                        
+                        <div className="flex items-center space-x-3 bg-slate-900 p-2 rounded-xl border border-slate-700">
+                            <button onClick={() => setStep(0)} className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition" title="重置">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                            </button>
+                            <button onClick={() => { setIsPlaying(false); setStep(s => Math.max(0, s - 1)); }} disabled={step === 0} className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-30 transition">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+                            </button>
+                            <button onClick={() => setIsPlaying(!isPlaying)} className={`w-28 py-2.5 rounded-lg font-bold flex justify-center items-center transition shadow-lg ${isPlaying ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'}`}>
+                                {isPlaying ? '暂停 (Pause)' : '自动播放'}
+                            </button>
+                            <button onClick={() => { setIsPlaying(false); setStep(s => Math.min(MAX_STEPS, s + 1)); }} disabled={step >= MAX_STEPS} className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-30 transition">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+                            </button>
+
+                            <div className="flex flex-col items-center ml-2 border-l border-slate-700 pl-4 pr-2">
+                                <span className="text-[10px] text-slate-400 mb-1 font-bold tracking-wider uppercase">速度</span>
+                                <input type="range" min="200" max="2200" step="100" value={2400 - speed} 
+                                    onChange={(e) => setSpeed(2400 - parseInt(e.target.value))} 
+                                    className="w-24 accent-indigo-500 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer" />
+                            </div>
+                        </div>
+                    </header>
+
+                    <div className="flex flex-col xl:flex-row gap-6 flex-1 w-full">
+
+                        <main className="flex-1 min-w-[800px]">
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
+                                {renderMainMemory()}
+                                {renderCacheMemory()}
+                                {renderCPUCore()}
+                            </div>
+                        </main>
+
+                        <aside className="w-full xl:w-[22rem] flex-shrink-0 flex flex-col gap-6 h-fit">
+                            
+                            <div className="bg-slate-800 border-l-4 border-indigo-500 p-5 rounded-xl shadow-lg">
+                                <div className="text-indigo-300 font-bold text-sm mb-4 border-b border-indigo-500/30 pb-2 flex justify-between">
+                                    <span>严格术语：宏块/微面板与瓦片</span>
+                                </div>
+                                <div className="flex flex-col space-y-2">
+                                    {loopTracker.map(loop => (
+                                        <div key={loop.id} className={`p-2 rounded transition-colors flex justify-between items-center ${loop.status === 'active' ? 'loop-active' : loop.status === 'done' ? 'border-l-4 border-slate-600 bg-slate-800 text-slate-500' : 'loop-inactive bg-slate-900/50'}`}>
+                                            <div>
+                                                <div className="text-xs font-bold mb-1">{loop.name}</div>
+                                                <div className="text-[10px]">{loop.desc}</div>
+                                            </div>
+                                            <div className={`text-[10px] px-2 py-1 rounded font-bold ${loop.status === 'active' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' : 'bg-slate-800 border border-slate-700'}`}>
+                                                {loop.target}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="bg-slate-800 border-l-4 border-emerald-500 p-5 rounded-xl shadow-lg">
+                                <div className="flex items-center mb-3">
+                                    <div className="bg-emerald-500/20 p-2 rounded-lg mr-3">
+                                        <svg className="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                    </div>
+                                    <div className="flex-1">
+                                        <div className="text-emerald-300 font-bold text-sm flex items-center">
+                                            物理状态解析
+                                        </div>
+                                    </div>
+                                    <span className="bg-slate-900 px-2 py-0.5 rounded text-xs font-mono text-slate-400 border border-slate-700">Step {step}/{MAX_STEPS}</span>
+                                </div>
+                                <p className="text-slate-100 text-base leading-relaxed border-t border-slate-700 pt-4 mt-2 font-sans">
+                                    {phase.msg}
+                                </p>
+                            </div>
+                        </aside>
+
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<GEMMHierarchyVisualizer />);
+    </script>
+</body>
+</html>

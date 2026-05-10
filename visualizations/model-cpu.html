@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>vspm</title>
+    <style>
+        .hide {
+            display: none;
+        }
+    </style>
+    <script src="./initialData.js"></script>
+    <script type="module" crossorigin src="./assets/index-2e72f6c9.js"></script>
+    <link rel="stylesheet" href="./assets/index-851e0f65.css">
+    <script
+        type="module">import.meta.url; import("_").catch(() => 1); async function* g() { }; if (location.protocol != "file:") { window.__vite_is_modern_browser = true }</script>
+    <script
+        type="module">!function () { if (window.__vite_is_modern_browser) return; console.warn("vite: loading legacy chunks, syntax error above and the same error below should be ignored"); var e = document.getElementById("vite-legacy-polyfill"), n = document.createElement("script"); n.src = e.src, n.onload = function () { System.import(document.getElementById('vite-legacy-entry').getAttribute('data-src')) }, document.body.appendChild(n) }();</script>
+</head>
+
+<body>
+    <div class="actions">
+        <!-- 时钟控制 -->
+        <div class="clk-control row" x-data="clk">
+            <div class="col">时钟控制:</div>
+            <button x-bind:disabled="$store.clk.isAnimating" class="col btn-step" @click="step">
+                下一步
+            </button>
+            <button x-show="!$store.clk.isRunning" x-bind:disabled="$store.clk.isAnimating" class="col" @click="run">
+                运行
+            </button>
+            <button x-show="$store.clk.isRunning" class="col" @click="stop">
+                暂停
+            </button>
+            <button x-show="!$store.clk.isRunning" x-bind:disabled="$store.clk.isRunning || $store.clk.isAnimating"
+                class="col" @click="rise">
+                触发上升沿
+            </button>
+            <button x-show="!$store.clk.isRunning" x-bind:disabled="$store.clk.isRunning || $store.clk.isAnimating"
+                class="col" @click="neg">
+                触发下降沿
+            </button>
+            <!-- 速度调整 -->
+            <div class="flex-container" x-show="!$store.clk.isRunning">
+                <div class="col ml-lg">速度:</div>
+                <div class="col" x-data="speed">
+                    <select x-model="speed" x-bind:disabled="$store.clk.isRunning || $store.clk.isAnimating">
+                        <option value="0">关闭动画</option>
+                        <option value="0.1">非常快</option>
+                        <option value="0.5">较快</option>
+                        <option value="1">正常</option>
+                        <option value="2">慢</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <!-- 显示模块内容 -->
+        <div class="show-content row" x-data>
+            <div class="col">显示模块内容:</div>
+            <div class="col">
+                <label>
+                    <input type="checkbox" x-model="$store.showContent.ram" />
+                    存储器RAM
+                </label>
+            </div>
+            <div class="col">
+                <label>
+                    <input type="checkbox" x-model="$store.showContent.pc" />
+                    程序计数器PC
+                </label>
+            </div>
+            <div class="col">
+                <label>
+                    <input type="checkbox" x-model="$store.showContent.reg" />
+                    通用寄存器REG
+                </label>
+            </div>
+        </div>
+
+
+
+        <div class="row" x-data="snapshot">
+            <div class="col">记录数据:</div>
+
+            <div class="col">
+                <label>
+                    <input type="checkbox" x-model="rise" />
+                    上升沿
+                </label>
+            </div>
+
+            <div class="col">
+                <label>
+                    <input type="checkbox" x-model="neg" />
+                    下降沿
+                </label>
+            </div>
+
+
+
+            <!-- 数据显示的进制 -->
+            <div class="col ml-lg" x-data="radix">
+                使用
+                <select x-model="radix" style="width: 60px">
+                    <option value="2">2</option>
+                    <option value="8">8</option>
+                    <option value="10">10</option>
+                    <option value="16">16</option>
+                </select>
+                进制显示数据
+            </div>
+            <!-- 显示tooltip -->
+            <div class="col ml-lg tooltip-actions" x-data="showTooltip">
+                <div class="col">
+                    <label>
+                        <input type="checkbox" x-model="showTooltip" />
+                        显示tooltip
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="app" class="hide">
+        <div class="clk">
+            <div class="info">时钟</div>
+            <div class="graphic">
+                <div class="time-hand"></div>
+                <div class="main">
+                    <!-- 低电平 -->
+                    <!-- <div class="time-graphic-item low"></div> -->
+                    <!-- 上升沿 -->
+                    <!-- <div class="time-graphic-item rise"></div> -->
+                    <!-- 高电平 -->
+                    <!-- <div class="time-graphic-item high"></div> -->
+                    <!-- 下降沿 -->
+                    <!-- <div class="time-graphic-item neg"></div> -->
+                </div>
+            </div>
+        </div>
+        <div class="vspm-container" x-data x-bind:class="{
+                'animating': $store.clk.isAnimating,
+                'running': $store.clk.isRunning
+            }">
+            <div class="bus-container" id="bus-container"></div>
+            <div class="base-module con-signal">
+                <!-- 向上的箭头 -->
+                <div class="to-top-arrows top">
+                    <div class="arrow arrow-up"></div>
+                    <div class="arrow arrow-up"></div>
+                    <div class="arrow arrow-up"></div>
+                    <div class="arrow arrow-up"></div>
+                    <div class="arrow arrow-up"></div>
+                    <div class="arrow arrow-up"></div>
+                </div>
+                <div>控制信号产生逻辑</div>
+            </div>
+            <div class="base-module sm">
+                <div class="to-right-arrows left">
+                    <div class="flex-container bool sm_en">
+                        <div class="sm_en-text">SM_EN</div>
+                        <div class="arrow arrow-right"></div>
+                    </div>
+                </div>
+                <div>SM</div>
+                <div class="to-right-arrows right">
+                    <div class="flex-container bool sm_value">
+                        <div class="arrow arrow-right"></div>
+                        <div class="sm_value-text"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="base-module decoder">
+                <div>指令译码器</div>
+            </div>
+            <div class="base-module ir">
+                <div class="to-right-arrows left">
+                    <div class="flex-container bool ld_ir">
+                        <div class="ld_ir-text">LD_IR</div>
+                        <div class="arrow arrow-right"></div>
+                    </div>
+                </div>
+                <div>指令寄存器IR</div>
+            </div>
+            <div class="base-module ram" x-data>
+                <div class="to-right-arrows left">
+                    <div class="flex-container re bool">
+                        <div class="re-text">RE</div>
+                        <div class="arrow arrow-right"></div>
+                    </div>
+                    <div class="flex-container wr bool">
+                        <div class="wr-text">WR</div>
+                        <div class="arrow arrow-right"></div>
+                    </div>
+                </div>
+                <div class="content content-1" x-show="!$store.showContent.ram">
+                    <div>存储器</div>
+                    <div>RAM</div>
+                </div>
+                <div class="content content-2 ram-items" x-show="$store.showContent.ram">
+                    <div class="ram-item">
+                        <div class="ram-item-addr text-center">地址</div>
+                        <div class="ram-item-val text-center">值</div>
+                    </div>
+                    <!-- <div class="ram-item">
+                            <div class="ram-item-addr">00010001</div>
+                            <div class="ram-item-val">00010001</div>
+                        </div> -->
+                </div>
+            </div>
+            <div class="base-module psw">
+                <div class="to-top-arrows top">
+                    <div class="flex-container bool gf">
+                        <div class="gf-text">GF</div>
+                        <div class="arrow arrow-up"></div>
+                    </div>
+                </div>
+                <div class="to-top-arrows bottom">
+                    <div class="flex-container bool g_en">
+                        <div class="arrow arrow-up"></div>
+                        <div class="g_en-text">G_EN</div>
+                    </div>
+                </div>
+                <div>PSW</div>
+            </div>
+            <div class="base-module au">
+                <div class="to-left-arrows left">
+                    <div class="flex-container bool au_gf">
+                        <div class="arrow arrow-left"></div>
+                        <div class="au_gf-text"></div>
+                    </div>
+                </div>
+                <div>算数单元</div>
+                <div>AU</div>
+                <div class="au-inputs">
+                    <div>A</div>
+                    <div>B</div>
+                </div>
+                <div class="to-left-arrows right">
+                    <div class="flex-container au_en bool">
+                        <div class="arrow arrow-left"></div>
+                        <div class="au_en-text">AU_EN</div>
+                    </div>
+                    <div class="flex-container ac3 bool">
+                        <div class="arrow arrow-left"></div>
+                        <div class="ac3-text">AC<sub>3</sub></div>
+                    </div>
+                    <div class="flex-container ac2 bool">
+                        <div class="arrow arrow-left"></div>
+                        <div class="ac2-text">AC<sub>2</sub></div>
+                    </div>
+                    <div class="flex-container ac1 bool">
+                        <div class="arrow arrow-left"></div>
+                        <div class="ac1-text">AC<sub>1</sub></div>
+                    </div>
+                    <div class="flex-container ac0 bool">
+                        <div class="arrow arrow-left"></div>
+                        <div class="ac0-text">AC<sub>0</sub></div>
+                    </div>
+                </div>
+            </div>
+            <div class="base-module multiplexer-3-1">
+                <div class="to-right-arrows left">
+                    <div class="flex-container bool s2">
+                        <div class="s2-text">S<sub>2</sub></div>
+                        <div class="arrow arrow-right"></div>
+                    </div>
+                    <div class="flex-container bool s1">
+                        <div class="s1-text">S<sub>1</sub></div>
+                        <div class="arrow arrow-right"></div>
+                    </div>
+                </div>
+                <div>3-1选择器</div>
+                <div class="selector-items">
+                    <div>0</div>
+                    <div>1</div>
+                    <div>2</div>
+                </div>
+            </div>
+            <div class="base-module pc" x-data>
+                <div class="to-right-arrows left">
+                    <div class="flex-container in_pc bool">
+                        <div class="in_pc-text">IN_PC</div>
+                        <div class="arrow arrow-right"></div>
+                    </div>
+                    <div class="flex-container ld_pc bool">
+                        <div class="ld_pc-text">LD_PC</div>
+                        <div class="arrow arrow-right"></div>
+                    </div>
+                </div>
+                <div class="content content-1" x-show="!$store.showContent.pc">
+                    <div>程序计数器 PC</div>
+                </div>
+                <div class="content content-2" x-show="$store.showContent.pc">
+                    <div>程序计数器 PC</div>
+                    <div class="data-item">
+                        <div>addr:</div>
+                        <div class="data-item-val">00000000</div>
+                    </div>
+                </div>
+            </div>
+            <div class="base-module reg" x-data>
+                <div class="reg-outputs">
+                    <span>S</span>
+                    <span>D</span>
+                </div>
+                <div class="content content-1" x-show="!$store.showContent.reg">
+                    <div>通用寄存器</div>
+                </div>
+                <div class="content content-2" x-show="$store.showContent.reg">
+                    <div>通用寄存器</div>
+                    <div class="data-item">
+                        <div>R0:</div>
+                        <div class="data-item-val r0">00000000</div>
+                    </div>
+                    <div class="data-item">
+                        <div>R1:</div>
+                        <div class="data-item-val r1">00000000</div>
+                    </div>
+                    <div class="data-item">
+                        <div>R2:</div>
+                        <div class="data-item-val r2">00000000</div>
+                    </div>
+                    <div class="data-item">
+                        <div>R3:</div>
+                        <div class="data-item-val r3">00000000</div>
+                    </div>
+                </div>
+
+                <div class="to-left-arrows right">
+                    <div class="flex-container bool sr1">
+                        <div class="arrow arrow-left"></div>
+                        <div class="sr1-text">SR<sub>1</sub></div>
+                    </div>
+                    <div class="flex-container bool sr0">
+                        <div class="arrow arrow-left"></div>
+                        <div class="sr0-text">SR<sub>0</sub></div>
+                    </div>
+                    <div class="flex-container bool dr1">
+                        <div class="arrow arrow-left"></div>
+                        <div class="dr1-text">DR<sub>1</sub></div>
+                    </div>
+                    <div class="flex-container bool dr0">
+                        <div class="arrow arrow-left"></div>
+                        <div class="dr0-text">DR<sub>0</sub></div>
+                    </div>
+                    <div class="flex-container bool we">
+                        <div class="arrow arrow-left"></div>
+                        <div class="we-text">WE</div>
+                    </div>
+                </div>
+            </div>
+            <div class="base-module multiplexer-2-1">
+                <div>2-1选择器</div>
+                <div class="selector-items">
+                    <div>0</div>
+                    <div>1</div>
+                </div>
+                <div class="to-left-arrows right">
+                    <div class="flex-container s0 bool">
+                        <div class="arrow arrow-left"></div>
+                        <div class="s0-text">S<sub>0</sub></div>
+                    </div>
+                </div>
+            </div>
+            <div class="base-module input">
+                <div class="to-top-arrows top">
+                    <div class="flex-container">
+                        <div class="data-item">
+                            <div>input: <input type="text" /></div>
+                            <div class="data-item-val">00000000</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="to-top-arrows bottom">
+                    <div class="flex-container bool in_en">
+                        <div class="arrow arrow-up"></div>
+                        <div class="in_en-text">IN_EN</div>
+                    </div>
+                </div>
+                <div>输入</div>
+            </div>
+            <div class="base-module output">
+                <div class="to-top-arrows top">
+                    <div class="flex-container">
+                        <div class="data-item">
+                            <div>output:</div>
+                            <div class="data-item-val">00000000</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="to-top-arrows bottom">
+                    <div class="flex-container bool out_en">
+                        <div class="arrow arrow-up"></div>
+                        <div class="out_en-text">OUT_EN</div>
+                    </div>
+                </div>
+                <div>输出</div>
+            </div>
+        </div>
+        <div class="logger">
+            <div class="snapshots-container">
+                <!-- <div class="row snapshot-item-container-__type__">
+                        <div>类型</div>
+                    </div> -->
+            </div>
+        </div>
+    </div>
+    <div class="modal ram-edit hide">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h5 class="modal-title">编辑RAM</h5>
+            </div>
+            <div class="modal-body">
+                <p>编辑RAM的内容，每一条内容以 "," 或 换行 隔开</p>
+                <p>如果将内容写入到指定地址请使用 ":" ，例如"1:123"</p>
+                <p>
+                    输入指令时前四位是大写英文字母，再用一个空格隔开写后四位
+                </p>
+                <p>例如："MOVA 0101"，"IN"等</p>
+                <p>
+                    <textarea></textarea>
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button class="close secondary">关闭</button>
+                <button class="save">保存</button>
+            </div>
+        </div>
+    </div>
+    <div class="modal pc-edit hide">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h5 class="modal-title">编辑PC</h5>
+            </div>
+            <div class="modal-body">
+                <p>PC的值： <input type="text" /></p>
+            </div>
+            <div class="modal-footer">
+                <button class="close secondary">关闭</button>
+                <button class="save">保存</button>
+            </div>
+        </div>
+    </div>
+    <div class="modal reg-edit hide">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h5 class="modal-title">编辑寄存器</h5>
+            </div>
+            <div class="modal-body">
+                <p>R0： <input class="input-r0" type="text" /></p>
+                <p>R1： <input class="input-r1" type="text" /></p>
+                <p>R2： <input class="input-r2" type="text" /></p>
+                <p>R3： <input class="input-r3" type="text" /></p>
+            </div>
+            <div class="modal-footer">
+                <button class="close secondary">关闭</button>
+                <button class="save">保存</button>
+            </div>
+        </div>
+    </div>
+    <div class="copyright">
+        作者：艾麦尔
+        <a href="https://gitee.com/aimaier4869/vspm-ts">源码链接</a>
+    </div>
+
+    <script
+        nomodule>!function () { var e = document, t = e.createElement("script"); if (!("noModule" in t) && "onbeforeload" in t) { var n = !1; e.addEventListener("beforeload", (function (e) { if (e.target === t) n = !0; else if (!e.target.hasAttribute("nomodule") || !n) return; e.preventDefault() }), !0), t.type = "module", t.src = ".", e.head.appendChild(t), t.remove() } }();</script>
+    <script nomodule crossorigin id="vite-legacy-polyfill" src="./assets/polyfills-legacy-ac99e6f4.js"></script>
+    <script nomodule crossorigin id="vite-legacy-entry"
+        data-src="./assets/index-legacy-6e1c485c.js">System.import(document.getElementById('vite-legacy-entry').getAttribute('data-src'))</script>
+</body>
+
+</html>

@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CS 交互式可视化合集</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0b1120; color: #e2e8f0; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        .card { transition: all 0.2s ease; }
+        .card:hover { transform: translateY(-2px); box-shadow: 0 4px 24px rgba(59,130,246,0.15); }
+        .tag-algo { background: rgba(34,197,94,0.15); color: #4ade80; }
+        .tag-arch { background: rgba(59,130,246,0.15); color: #60a5fa; }
+        .tag-net { background: rgba(168,85,247,0.15); color: #c084fc; }
+    </style>
+</head>
+<body class="min-h-screen">
+    <div class="max-w-6xl mx-auto px-4 py-12">
+        <!-- Header -->
+        <header class="mb-12 text-center">
+            <h1 class="text-4xl font-bold mb-3 text-white">CS 交互式可视化合集</h1>
+            <p class="text-slate-400 text-lg max-w-2xl mx-auto">
+                50 个交互式演示，覆盖算法设计、计算机体系结构、网络安全。<br>
+                每步可追溯，每帧可推演——让抽象概念变得可见。
+            </p>
+        </header>
+
+        <!-- Stats -->
+        <div class="flex justify-center gap-8 mb-12 text-sm text-slate-500">
+            <span>50 个可视化</span>
+            <span>·</span>
+            <span>3 大领域</span>
+            <span>·</span>
+            <span>纯前端，零依赖本地文件</span>
+        </div>
+
+        <!-- Algorithms -->
+        <section class="mb-10">
+            <h2 class="text-2xl font-semibold mb-5 text-white flex items-center gap-2">
+                <span class="w-3 h-3 rounded-full bg-green-500 inline-block"></span>
+                算法设计与分析
+            </h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <a href="visualizations/simplex-method.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">单纯形法</span>
+                    <h3 class="text-white font-medium mt-2">单纯形法动态可视化</h3>
+                    <p class="text-slate-500 text-sm mt-1">Simplex Method 迭代过程动态推演</p>
+                </a>
+                <a href="visualizations/simplex-dual-space.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">单纯形法</span>
+                    <h3 class="text-white font-medium mt-2">单纯形法双空间映射揭秘</h3>
+                    <p class="text-slate-500 text-sm mt-1">原始空间与对偶空间的映射关系</p>
+                </a>
+                <a href="visualizations/branch-bound-01knapsack.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">分支限界</span>
+                    <h3 class="text-white font-medium mt-2">0-1 背包：优先队列分支限界</h3>
+                    <p class="text-slate-500 text-sm mt-1">优先队列分支限界法完整演示</p>
+                </a>
+                <a href="visualizations/branch-bound-tsp.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">分支限界</span>
+                    <h3 class="text-white font-medium mt-2">TSP 分支限界法</h3>
+                    <p class="text-slate-500 text-sm mt-1">旅行商问题的分支限界求解</p>
+                </a>
+                <a href="visualizations/tsp-backtracking.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">回溯</span>
+                    <h3 class="text-white font-medium mt-2">TSP 回溯算法</h3>
+                    <p class="text-slate-500 text-sm mt-1">回溯法求解 TSP 完整搜索树</p>
+                </a>
+                <a href="visualizations/quicksort.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">排序</span>
+                    <h3 class="text-white font-medium mt-2">快速排序可视化</h3>
+                    <p class="text-slate-500 text-sm mt-1">Quick Sort 分区过程逐步推演</p>
+                </a>
+                <a href="visualizations/closest-pair.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">分治法</span>
+                    <h3 class="text-white font-medium mt-2">最近点对问题</h3>
+                    <p class="text-slate-500 text-sm mt-1">分治法求解平面最近点对</p>
+                </a>
+                <a href="visualizations/karatsuba.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">分治法</span>
+                    <h3 class="text-white font-medium mt-2">Karatsuba 大整数乘法</h3>
+                    <p class="text-slate-500 text-sm mt-1">分治乘法策略单步可视化</p>
+                </a>
+                <a href="visualizations/round-robin.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">分治法</span>
+                    <h3 class="text-white font-medium mt-2">循环赛日程表</h3>
+                    <p class="text-slate-500 text-sm mt-1">分治法安排循环赛对阵表</p>
+                </a>
+                <a href="visualizations/chessboard-cover.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">分治法</span>
+                    <h3 class="text-white font-medium mt-2">棋盘覆盖（标准）</h3>
+                    <p class="text-slate-500 text-sm mt-1">L形骨牌覆盖棋盘分治算法</p>
+                </a>
+                <a href="visualizations/chessboard-obstacle.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">DP</span>
+                    <h3 class="text-white font-medium mt-2">棋盘覆盖（含障碍）</h3>
+                    <p class="text-slate-500 text-sm mt-1">有障碍的棋盘覆盖方案计数</p>
+                </a>
+                <a href="visualizations/bfprt-select.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">选择算法</span>
+                    <h3 class="text-white font-medium mt-2">BFPRT 线性时间选择</h3>
+                    <p class="text-slate-500 text-sm mt-1">中位数的中位数选择算法</p>
+                </a>
+                <a href="visualizations/max-subarray.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">DP</span>
+                    <h3 class="text-white font-medium mt-2">最大子段和</h3>
+                    <p class="text-slate-500 text-sm mt-1">动态规划经典：最大子数组</p>
+                </a>
+                <a href="visualizations/lcs.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">DP</span>
+                    <h3 class="text-white font-medium mt-2">最长公共子序列 (LCS)</h3>
+                    <p class="text-slate-500 text-sm mt-1">LCS 填表过程完整推演</p>
+                </a>
+                <a href="visualizations/huffman.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">贪心</span>
+                    <h3 class="text-white font-medium mt-2">哈夫曼编码</h3>
+                    <p class="text-slate-500 text-sm mt-1">贪心算法构建最优前缀编码</p>
+                </a>
+                <a href="visualizations/activity-selection.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">贪心</span>
+                    <h3 class="text-white font-medium mt-2">活动安排问题</h3>
+                    <p class="text-slate-500 text-sm mt-1">贪心选择最大相容活动子集</p>
+                </a>
+                <a href="visualizations/interval-covering.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">贪心</span>
+                    <h3 class="text-white font-medium mt-2">区间覆盖问题</h3>
+                    <p class="text-slate-500 text-sm mt-1">用最少区间覆盖目标线段</p>
+                </a>
+                <a href="visualizations/mst.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">图论</span>
+                    <h3 class="text-white font-medium mt-2">最小生成树</h3>
+                    <p class="text-slate-500 text-sm mt-1">Kruskal + Prim 双算法可视化</p>
+                </a>
+                <a href="visualizations/matrix-chain.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">DP</span>
+                    <h3 class="text-white font-medium mt-2">矩阵连乘</h3>
+                    <p class="text-slate-500 text-sm mt-1">最优加括号方案 DP 求解</p>
+                </a>
+                <a href="visualizations/convex-triangulation.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">DP</span>
+                    <h3 class="text-white font-medium mt-2">凸多边形最优三角剖分</h3>
+                    <p class="text-slate-500 text-sm mt-1">与矩阵连乘完美同构</p>
+                </a>
+                <a href="visualizations/triangulation-isomorphism.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">DP</span>
+                    <h3 class="text-white font-medium mt-2">三角剖分与矩阵连乘同构</h3>
+                    <p class="text-slate-500 text-sm mt-1">揭示两个经典DP问题的深层联系</p>
+                </a>
+                <a href="visualizations/obst.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">DP</span>
+                    <h3 class="text-white font-medium mt-2">最优二叉搜索树 (OBST)</h3>
+                    <p class="text-slate-500 text-sm mt-1">带概率的最优BST动态规划</p>
+                </a>
+                <a href="visualizations/polygon-game.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">DP</span>
+                    <h3 class="text-white font-medium mt-2">多边形游戏</h3>
+                    <p class="text-slate-500 text-sm mt-1">环形DP + 最优子结构推导</p>
+                </a>
+                <a href="visualizations/image-compression.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">DP</span>
+                    <h3 class="text-white font-medium mt-2">图像压缩</h3>
+                    <p class="text-slate-500 text-sm mt-1">动态规划优化像素段存储</p>
+                </a>
+                <a href="visualizations/coin-partition.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">DP</span>
+                    <h3 class="text-white font-medium mt-2">分硬币最小化差值</h3>
+                    <p class="text-slate-500 text-sm mt-1">子集划分的DP最优解</p>
+                </a>
+                <a href="visualizations/n-queens.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">回溯</span>
+                    <h3 class="text-white font-medium mt-2">N 后问题</h3>
+                    <p class="text-slate-500 text-sm mt-1">经典回溯：皇后放置搜索</p>
+                </a>
+                <a href="visualizations/max-clique.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">回溯</span>
+                    <h3 class="text-white font-medium mt-2">最大团问题</h3>
+                    <p class="text-slate-500 text-sm mt-1">回溯搜索图中最大完全子图</p>
+                </a>
+                <a href="visualizations/sign-triangle.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">回溯</span>
+                    <h3 class="text-white font-medium mt-2">符号三角形</h3>
+                    <p class="text-slate-500 text-sm mt-1">回溯构造满足约束的符号三角</p>
+                </a>
+                <a href="visualizations/m-coloring.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">回溯</span>
+                    <h3 class="text-white font-medium mt-2">图的 m 着色问题</h3>
+                    <p class="text-slate-500 text-sm mt-1">回溯分配图中顶点的颜色</p>
+                </a>
+                <a href="visualizations/container-loading.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-algo text-xs px-2 py-0.5 rounded">回溯</span>
+                    <h3 class="text-white font-medium mt-2">装载问题</h3>
+                    <p class="text-slate-500 text-sm mt-1">回溯搜索最优集装箱装载</p>
+                </a>
+            </div>
+        </section>
+
+        <!-- Computer Architecture -->
+        <section class="mb-10">
+            <h2 class="text-2xl font-semibold mb-5 text-white flex items-center gap-2">
+                <span class="w-3 h-3 rounded-full bg-blue-500 inline-block"></span>
+                计算机体系结构
+            </h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <a href="visualizations/matrix-cache.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">Cache</span>
+                    <h3 class="text-white font-medium mt-2">矩阵乘法 6 种视角与 Cache 优化</h3>
+                    <p class="text-slate-500 text-sm mt-1">i/j/k 六种循环顺序的缓存行为对比</p>
+                </a>
+                <a href="visualizations/memory-mapping.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">OS</span>
+                    <h3 class="text-white font-medium mt-2">内存映射与缺页中断</h3>
+                    <p class="text-slate-500 text-sm mt-1">mmap 全流程：虚拟地址到物理页</p>
+                </a>
+                <a href="visualizations/linking.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">链接</span>
+                    <h3 class="text-white font-medium mt-2">CSAPP 链接机制全景</h3>
+                    <p class="text-slate-500 text-sm mt-1">静态/动态链接完整对比</p>
+                </a>
+                <a href="visualizations/plt-got.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">链接</span>
+                    <h3 class="text-white font-medium mt-2">ELF PLT/GOT 延迟绑定</h3>
+                    <p class="text-slate-500 text-sm mt-1">动态链接的 PLT 跳转与 GOT 重填</p>
+                </a>
+                <a href="visualizations/stack-x86.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">栈帧</span>
+                    <h3 class="text-white font-medium mt-2">x86 栈帧 (32-bit cdecl)</h3>
+                    <p class="text-slate-500 text-sm mt-1">cdecl 调用约定的栈帧全景</p>
+                </a>
+                <a href="visualizations/stack-linux-x64.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">栈帧</span>
+                    <h3 class="text-white font-medium mt-2">System V AMD64 栈帧</h3>
+                    <p class="text-slate-500 text-sm mt-1">Linux x64 ABI：红区、对齐、寄存器传参</p>
+                </a>
+                <a href="visualizations/stack-win64.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">栈帧</span>
+                    <h3 class="text-white font-medium mt-2">Windows x64 栈帧</h3>
+                    <p class="text-slate-500 text-sm mt-1">Win64 ABI：shadow space 与对齐</p>
+                </a>
+                <a href="visualizations/cache-tlb.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">Cache</span>
+                    <h3 class="text-white font-medium mt-2">VIPT/PIPT/TLB 缓存架构</h3>
+                    <p class="text-slate-500 text-sm mt-1">虚拟/物理索引缓存的并行流转</p>
+                </a>
+                <a href="visualizations/wallace-tree.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">ALU</span>
+                    <h3 class="text-white font-medium mt-2">华莱士树乘法器</h3>
+                    <p class="text-slate-500 text-sm mt-1">多权重列并行压缩架构</p>
+                </a>
+                <a href="visualizations/model-cpu.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">CPU</span>
+                    <h3 class="text-white font-medium mt-2">模型机演示</h3>
+                    <p class="text-slate-500 text-sm mt-1">从零手搓的简化CPU教学模型</p>
+                </a>
+                <a href="visualizations/systolic-array.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">NPU</span>
+                    <h3 class="text-white font-medium mt-2">脉动阵列 GEMM</h3>
+                    <p class="text-slate-500 text-sm mt-1">Systolic Array 矩阵乘法数据流</p>
+                </a>
+                <a href="visualizations/cache-mesi.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">Cache</span>
+                    <h3 class="text-white font-medium mt-2">MESI 缓存一致性协议</h3>
+                    <p class="text-slate-500 text-sm mt-1">多核CPU缓存状态转换全演示</p>
+                </a>
+                <a href="visualizations/cache-line-boundary.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">Cache</span>
+                    <h3 class="text-white font-medium mt-2">跨缓存行边界读取</h3>
+                    <p class="text-slate-500 text-sm mt-1">对齐对Cache性能的影响可视化</p>
+                </a>
+                <a href="visualizations/cache-associativity.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">Cache</span>
+                    <h3 class="text-white font-medium mt-2">Cache 相联度可视化</h3>
+                    <p class="text-slate-500 text-sm mt-1">组相联/全相联/直接映射对比</p>
+                </a>
+                <a href="visualizations/cache-addressing.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">Cache</span>
+                    <h3 class="text-white font-medium mt-2">Cache 寻址可视化</h3>
+                    <p class="text-slate-500 text-sm mt-1">一题讲清缓存地址拆分</p>
+                </a>
+                <a href="visualizations/cpu-pipeline-unroll.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">流水线</span>
+                    <h3 class="text-white font-medium mt-2">CPU 流水线与循环展开</h3>
+                    <p class="text-slate-500 text-sm mt-1">数据冒险、转发与循环展开深度解析</p>
+                </a>
+                <a href="visualizations/blis-gemm-pack.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">HPC</span>
+                    <h3 class="text-white font-medium mt-2">BLIS 架构：GEMM Pack 策略</h3>
+                    <p class="text-slate-500 text-sm mt-1">矩阵分块与 Pack 缓冲区设计</p>
+                </a>
+                <a href="visualizations/blis-gemm-hpc.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-arch text-xs px-2 py-0.5 rounded">HPC</span>
+                    <h3 class="text-white font-medium mt-2">BLIS 架构：HPC 内存层级</h3>
+                    <p class="text-slate-500 text-sm mt-1">非对称GEMM的完整内存层级透视</p>
+                </a>
+            </div>
+        </section>
+
+        <!-- Networking & Security -->
+        <section class="mb-10">
+            <h2 class="text-2xl font-semibold mb-5 text-white flex items-center gap-2">
+                <span class="w-3 h-3 rounded-full bg-purple-500 inline-block"></span>
+                网络与安全
+            </h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <a href="visualizations/nat-bridge.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-net text-xs px-2 py-0.5 rounded">网络</span>
+                    <h3 class="text-white font-medium mt-2">IP 路由与 NAT 转换</h3>
+                    <p class="text-slate-500 text-sm mt-1">NAT 地址转换与 IP 路由全流程</p>
+                </a>
+                <a href="visualizations/rop-stack-overflow.html" class="card block p-4 bg-slate-900 rounded-lg border border-slate-800 hover:border-blue-600/50">
+                    <span class="tag-net text-xs px-2 py-0.5 rounded">安全</span>
+                    <h3 class="text-white font-medium mt-2">栈溢出与 ROP 栈对齐</h3>
+                    <p class="text-slate-500 text-sm mt-1">Ret2Text 攻击与栈对齐机制</p>
+                </a>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="mt-16 pt-8 border-t border-slate-800 text-center text-slate-600 text-sm">
+            <p>50 个交互式可视化 · 纯前端 · GitHub Pages 托管</p>
+            <p class="mt-1">由 <a href="https://github.com/2bitbit" class="text-slate-500 hover:text-slate-300">2bitbit</a> 使用 AI 辅助创作</p>
+        </footer>
+    </div>
+</body>
+</html>

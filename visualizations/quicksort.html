@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>快速排序 (Quick Sort) 可视化</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 React 和 ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- 引入 Babel 用于在浏览器中编译 JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-800">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // 生成初始的复杂数组 (30个元素，包含重复、随机)
+        const generateComplexArray = () => {
+            const arr = [];
+            for (let i = 0; i < 30; i++) {
+                // 确保值在 10 到 99 之间，便于显示
+                arr.push(Math.floor(Math.random() * 90) + 10); 
+            }
+            // 手动制造一些特定的复杂情况：连续相同的数字，部分倒序
+            arr[5] = arr[6] = arr[7] = 42; 
+            arr[20] = 88; arr[21] = 77; arr[22] = 66;
+            return arr;
+        };
+
+        // 预先运行快排算法，生成每一步的执行轨迹 (Trace)
+        const generateQuickSortTrace = (initialArray) => {
+            const trace = [];
+            const arr = [...initialArray];
+            const sortedIndices = new Set();
+
+            const pushState = (type, low, high, pivotIdx, i, j, msg) => {
+                trace.push({
+                    arr: [...arr],
+                    type, low, high, pivotIdx, i, j, msg,
+                    sortedIndices: new Set(sortedIndices)
+                });
+            };
+
+            const partition = (low, high) => {
+                const pivot = arr[high];
+                let i = low - 1;
+                
+                pushState('pivot_select', low, high, high, i, low, `开始对范围 [${low}, ${high}] 分区，选择尾部元素 ${pivot} 为基准 (Pivot)`);
+
+                for (let j = low; j < high; j++) {
+                    pushState('compare', low, high, high, i, j, `比较: 元素 ${arr[j]} 是否小于基准 ${pivot}？`);
+                    
+                    if (arr[j] < pivot) {
+                        i++;
+                        // Swap arr[i] and arr[j]
+                        const temp = arr[i];
+                        arr[i] = arr[j];
+                        arr[j] = temp;
+                        if (i !== j) {
+                            pushState('swap', low, high, high, i, j, `是！将小于基准的 ${arr[i]} 与左侧边界元素交换`);
+                        }
+                    }
+                }
+                
+                // Swap arr[i + 1] and arr[high] (pivot)
+                const temp = arr[i + 1];
+                arr[i + 1] = arr[high];
+                arr[high] = temp;
+                
+                sortedIndices.add(i + 1);
+                pushState('partition_done', low, high, i + 1, null, null, `分区完成！基准 ${pivot} 放置到了最终正确位置 (索引 ${i + 1})`);
+                
+                return i + 1;
+            };
+
+            const quickSort = (low, high) => {
+                if (low < high) {
+                    const pi = partition(low, high);
+                    quickSort(low, pi - 1);
+                    quickSort(pi + 1, high);
+                } else if (low === high) {
+                    sortedIndices.add(low);
+                    pushState('sorted_single', low, high, null, null, null, `子数组仅剩 1 个元素，${arr[low]} 已在正确位置`);
+                }
+            };
+
+            pushState('start', 0, arr.length - 1, null, null, null, "算法开始：准备进行快速排序");
+            quickSort(0, arr.length - 1);
+            pushState('complete', null, null, null, null, null, "排序完成！所有元素均已就位。");
+            
+            return trace;
+        };
+
+        const App = () => {
+            const [initialArray, setInitialArray] = useState([]);
+            const [trace, setTrace] = useState([]);
+            const [currentStep, setCurrentStep] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const canvasRef = useRef(null);
+            const [speed, setSpeed] = useState(500); // 毫秒
+
+            // 初始化
+            useEffect(() => {
+                handleReset();
+            }, []);
+
+            // 自动播放逻辑
+            useEffect(() => {
+                let timer;
+                if (isPlaying && currentStep < trace.length - 1) {
+                    timer = setTimeout(() => {
+                        setCurrentStep(prev => prev + 1);
+                    }, speed);
+                } else if (currentStep >= trace.length - 1) {
+                    setIsPlaying(false);
+                }
+                return () => clearTimeout(timer);
+            }, [isPlaying, currentStep, trace.length, speed]);
+
+            // 画布渲染逻辑
+            useEffect(() => {
+                if (trace.length === 0 || !canvasRef.current) return;
+
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                const state = trace[currentStep];
+                
+                // 获取 CSS 尺寸并设置高分辨率画布
+                const rect = canvas.parentElement.getBoundingClientRect();
+                canvas.width = rect.width * window.devicePixelRatio;
+                canvas.height = 400 * window.devicePixelRatio;
+                ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+                canvas.style.width = `${rect.width}px`;
+                canvas.style.height = `400px`;
+
+                const width = rect.width;
+                const height = 400;
+
+                ctx.clearRect(0, 0, width, height);
+
+                const arr = state.arr;
+                const n = arr.length;
+                const padding = 20;
+                const maxVal = Math.max(...arr) + 10; 
+                const barWidth = (width - padding * 2) / n;
+                
+                // 绘制条形图
+                arr.forEach((val, idx) => {
+                    const barHeight = (val / maxVal) * (height - 80);
+                    const x = padding + idx * barWidth;
+                    const y = height - barHeight - 30; // 底部留白给文字
+
+                    // 决定颜色
+                    let fillColor = '#93C5FD'; // 默认蓝色 (Tailwind blue-300)
+                    let strokeColor = '#2563EB'; // 默认深蓝 (Tailwind blue-600)
+                    
+                    if (state.sortedIndices && state.sortedIndices.has(idx)) {
+                        fillColor = '#A78BFA'; // 已排序：紫色 (purple-400)
+                        strokeColor = '#6D28D9';
+                    } else if (state.low !== null && idx >= state.low && idx <= state.high) {
+                        fillColor = '#BFDBFE'; // 当前分区内：浅蓝 (blue-200)
+                    }
+
+                    // 高亮特定元素
+                    if (idx === state.pivotIdx) {
+                        fillColor = '#FCA5A5'; // 基准：红色 (red-300)
+                        strokeColor = '#DC2626';
+                    } else if (idx === state.j) {
+                        fillColor = '#FDE047'; // 比较中(遍历指针j)：黄色 (yellow-300)
+                        strokeColor = '#CA8A04';
+                    } else if (idx === state.i) {
+                        fillColor = '#6EE7B7'; // 较小元素边界(指针i)：绿色 (emerald-300)
+                        strokeColor = '#059669';
+                    }
+
+                    // 绘制矩形
+                    ctx.fillStyle = fillColor;
+                    ctx.fillRect(x + 2, y, barWidth - 4, barHeight);
+                    ctx.strokeStyle = strokeColor;
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x + 2, y, barWidth - 4, barHeight);
+
+                    // 绘制数值
+                    ctx.fillStyle = '#1F2937'; // 文本颜色 (gray-800)
+                    ctx.font = 'bold 12px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(val, x + barWidth / 2, y - 5);
+
+                    // 绘制指针标记
+                    ctx.font = '12px sans-serif';
+                    ctx.fillStyle = '#4B5563';
+                    if (idx === state.i) ctx.fillText('i', x + barWidth / 2, height - 10);
+                    if (idx === state.j) ctx.fillText('j', x + barWidth / 2, height - 10);
+                    if (idx === state.pivotIdx && state.type !== 'partition_done') {
+                        ctx.fillText('Pivot', x + barWidth / 2, height - 10);
+                    }
+                });
+
+                // 绘制当前状态信息板
+                ctx.fillStyle = '#1E40AF'; // blue-800
+                ctx.font = 'bold 16px sans-serif';
+                ctx.textAlign = 'left';
+                ctx.fillText(`步骤 ${currentStep + 1} / ${trace.length}`, padding, 24);
+                
+                ctx.fillStyle = '#374151'; // gray-700
+                ctx.font = '16px sans-serif';
+                ctx.fillText(`信息: ${state.msg}`, padding, 50);
+
+            }, [currentStep, trace]);
+
+            const handleReset = () => {
+                setIsPlaying(false);
+                const newArr = generateComplexArray();
+                setInitialArray(newArr);
+                const newTrace = generateQuickSortTrace(newArr);
+                setTrace(newTrace);
+                setCurrentStep(0);
+            };
+
+            const handleNext = () => {
+                if (currentStep < trace.length - 1) setCurrentStep(prev => prev + 1);
+            };
+
+            const handlePrev = () => {
+                if (currentStep > 0) setCurrentStep(prev => prev - 1);
+            };
+
+            return (
+                <div className="max-w-5xl mx-auto p-6 flex flex-col gap-6">
+                    <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+                        <h1 className="text-2xl font-bold text-gray-800 border-b pb-4 mb-4 flex items-center gap-2">
+                            <span className="bg-blue-600 text-white p-2 rounded-lg">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h18"/><path d="m16 16 4-4-4-4"/><path d="M3 6h18"/><path d="M3 18h18"/></svg>
+                            </span>
+                            快速排序 (Lomuto 分区法) 可视化
+                        </h1>
+                        
+                        {/* 画布容器 */}
+                        <div className="w-full bg-gray-50 rounded-lg border border-gray-200 mb-6 overflow-hidden relative">
+                            <canvas ref={canvasRef} className="block w-full"></canvas>
+                        </div>
+
+                        {/* 控制面板 */}
+                        <div className="flex flex-wrap items-center justify-between gap-4 bg-gray-50 p-4 rounded-lg border border-gray-200">
+                            <div className="flex items-center gap-3">
+                                <button 
+                                    onClick={handlePrev} 
+                                    disabled={currentStep === 0}
+                                    className="px-4 py-2 bg-white border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                >
+                                    上一步
+                                </button>
+                                
+                                <button 
+                                    onClick={() => setIsPlaying(!isPlaying)}
+                                    disabled={currentStep >= trace.length - 1}
+                                    className={`px-6 py-2 rounded-md shadow-sm text-sm font-bold text-white transition-colors flex items-center gap-2 ${isPlaying ? 'bg-amber-500 hover:bg-amber-600' : 'bg-blue-600 hover:bg-blue-700'} disabled:opacity-50 disabled:cursor-not-allowed`}
+                                >
+                                    {isPlaying ? '⏸ 暂停' : '▶ 播放'}
+                                </button>
+
+                                <button 
+                                    onClick={handleNext} 
+                                    disabled={currentStep >= trace.length - 1}
+                                    className="px-4 py-2 bg-white border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                >
+                                    下一步
+                                </button>
+                                
+                                <button 
+                                    onClick={handleReset}
+                                    className="ml-2 px-4 py-2 text-sm font-medium text-red-600 hover:text-red-800 hover:bg-red-50 rounded-md transition-colors"
+                                >
+                                    ↻ 重新生成数组
+                                </button>
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                                <label className="text-sm font-medium text-gray-700">播放速度:</label>
+                                <input 
+                                    type="range" 
+                                    min="50" max="1000" step="50"
+                                    value={1050 - speed} 
+                                    onChange={(e) => setSpeed(1050 - parseInt(e.target.value))}
+                                    className="w-32 accent-blue-600"
+                                    title="调整自动播放速度"
+                                />
+                            </div>
+                        </div>
+
+                        {/* 图例 */}
+                        <div className="mt-6 flex flex-wrap gap-4 text-sm text-gray-600">
+                            <div className="flex items-center gap-1"><span className="w-3 h-3 inline-block bg-blue-300 border border-blue-600"></span> 默认未排序</div>
+                            <div className="flex items-center gap-1"><span className="w-3 h-3 inline-block bg-blue-200 border border-blue-400"></span> 当前分区</div>
+                            <div className="flex items-center gap-1"><span className="w-3 h-3 inline-block bg-red-300 border border-red-600"></span> 基准值 (Pivot)</div>
+                            <div className="flex items-center gap-1"><span className="w-3 h-3 inline-block bg-yellow-300 border border-yellow-600"></span> 遍历指针 (j)</div>
+                            <div className="flex items-center gap-1"><span className="w-3 h-3 inline-block bg-emerald-300 border border-emerald-600"></span> 较小值边界 (i)</div>
+                            <div className="flex items-center gap-1"><span className="w-3 h-3 inline-block bg-purple-400 border border-purple-600"></span> 已就位 (最终位置)</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

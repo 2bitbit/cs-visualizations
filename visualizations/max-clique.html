@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>最大团问题 - 回溯算法可视化</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        canvas {
+            background-color: #f8fafc; /* slate-50 */
+            border-radius: 0.5rem;
+            box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06);
+        }
+        .log-container {
+            scrollbar-width: thin;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen flex flex-col font-sans text-gray-800">
+
+    <header class="bg-blue-900 text-white p-4 shadow-md">
+        <h1 class="text-2xl font-bold">最大团问题 (Maximum Clique) - 回溯算法可视化</h1>
+        <p class="text-sm mt-1 text-blue-200">图解状态空间树的探索与剪枝过程</p>
+    </header>
+
+    <main class="flex-1 flex flex-col md:flex-row p-4 gap-4 overflow-hidden">
+        <!-- 左侧：图可视化区域 -->
+        <div class="flex-1 bg-white rounded-lg shadow-md flex flex-col p-4 relative">
+            <h2 class="text-lg font-semibold mb-2 border-b pb-2">图结构与当前状态</h2>
+            <div class="flex-1 relative w-full h-full min-h-[400px]" id="canvas-container">
+                <canvas id="graphCanvas"></canvas>
+            </div>
+            
+            <div class="mt-4 flex flex-wrap gap-4 text-sm justify-center">
+                <div class="flex items-center gap-1"><span class="w-4 h-4 rounded-full bg-slate-300 inline-block"></span> 未处理节点</div>
+                <div class="flex items-center gap-1"><span class="w-4 h-4 rounded-full bg-green-500 inline-block"></span> 当前团内节点</div>
+                <div class="flex items-center gap-1"><span class="w-4 h-4 rounded-full bg-yellow-400 inline-block"></span> 正在考察节点</div>
+                <div class="flex items-center gap-1"><span class="w-4 h-4 rounded-full bg-red-500 inline-block"></span> 冲突/剪枝节点</div>
+            </div>
+        </div>
+
+        <!-- 右侧：控制面板与日志 -->
+        <div class="w-full md:w-1/3 bg-white rounded-lg shadow-md flex flex-col p-4">
+            <h2 class="text-lg font-semibold mb-2 border-b pb-2">算法控制</h2>
+            
+            <div class="flex flex-wrap gap-2 mb-4">
+                <button id="btn-start" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition">播放</button>
+                <button id="btn-pause" class="px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded transition hidden">暂停</button>
+                <button id="btn-step" class="px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded transition">单步前进</button>
+                <button id="btn-reset" class="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded transition">重置</button>
+            </div>
+
+            <div class="mb-4 bg-blue-50 p-3 rounded border border-blue-100">
+                <div class="flex justify-between mb-1">
+                    <span class="font-medium text-blue-800">当前找到的最大团大小:</span>
+                    <span id="stat-max-size" class="font-bold text-blue-900 text-lg">0</span>
+                </div>
+                <div class="flex justify-between text-sm text-blue-700">
+                    <span>最大团节点:</span>
+                    <span id="stat-max-nodes">[]</span>
+                </div>
+            </div>
+
+            <h2 class="text-lg font-semibold mb-2 border-b pb-2 mt-2">执行日志 (状态机)</h2>
+            <div id="log-container" class="flex-1 overflow-y-auto bg-gray-50 border rounded p-2 text-sm log-container flex flex-col gap-1">
+                <!-- 日志条目将在这里动态生成 -->
+            </div>
+        </div>
+    </main>
+
+<script>
+    // --- 1. 图的定义 (8个节点的复杂图) ---
+    // 我们设计一个图，其中包含一个大小为 4 的最大团 (节点 0, 1, 2, 3)
+    // 并且包含一些诱导分支以展示剪枝
+    const numNodes = 8;
+    const edges = [
+        [0, 1], [0, 2], [0, 3], [0, 4],
+        [1, 2], [1, 3], [1, 5],
+        [2, 3], [2, 6],
+        [3, 4], [3, 7],
+        [4, 5],
+        [5, 6], [5, 7],
+        [6, 7]
+    ];
+
+    // 构建邻接矩阵
+    const adj = Array.from({ length: numNodes }, () => Array(numNodes).fill(false));
+    edges.forEach(([u, v]) => {
+        adj[u][v] = true;
+        adj[v][u] = true;
+    });
+
+    // --- 2. 回溯算法引擎与状态记录 ---
+    const states = []; // 存储算法执行的每一步状态
+    let globalMaxClique = [];
+    let currentClique = [];
+
+    // 记录状态的辅助函数
+    function recordState(type, data) {
+        states.push({
+            type,
+            currentClique: [...currentClique],
+            maxSize: globalMaxClique.length,
+            maxClique: [...globalMaxClique],
+            ...data
+        });
+    }
+
+    function backtrack(i) {
+        // 到达叶子节点
+        if (i === numNodes) {
+            if (currentClique.length > globalMaxClique.length) {
+                globalMaxClique = [...currentClique];
+                recordState('NEW_MAX', { msg: `到达叶子节点。找到更大的团，大小为 ${globalMaxClique.length}，节点：[${globalMaxClique.join(', ')}]` });
+            } else {
+                recordState('LEAF', { msg: `到达叶子节点。当前团大小为 ${currentClique.length}，未超越历史最大值 ${globalMaxClique.length}。` });
+            }
+            return;
+        }
+
+        // 剪枝条件：边界剪枝 (Bound Pruning)
+        // 当前团的大小 + 剩余可选节点数 <= 已知最大团的大小
+        const remaining = numNodes - i;
+        if (currentClique.length + remaining <= globalMaxClique.length) {
+            recordState('PRUNE_BOUND', { 
+                node: i, 
+                msg: `【边界剪枝】考察节点 ${i} 之前：当前团大小(${currentClique.length}) + 剩余节点数(${remaining}) <= 已知最大团(${globalMaxClique.length})。不再深入此分支。` 
+            });
+            return;
+        }
+
+        recordState('CONSIDER', { node: i, msg: `开始考察节点 ${i}。当前团：[${currentClique.join(', ')}]` });
+
+        // 判断节点 i 是否可以加入当前团 (必须与团内所有节点相连)
+        let canAdd = true;
+        let conflictNode = -1;
+        for (let v of currentClique) {
+            if (!adj[i][v]) {
+                canAdd = false;
+                conflictNode = v;
+                break;
+            }
+        }
+
+        // 分支 1：包含节点 i
+        if (canAdd) {
+            currentClique.push(i);
+            recordState('ADD', { node: i, msg: `节点 ${i} 与团内所有节点相连。将其加入当前团。` });
+            
+            backtrack(i + 1); // 递归
+            
+            // 回溯
+            currentClique.pop();
+            recordState('BACKTRACK', { node: i, msg: `从节点 ${i} 的 "包含" 分支回溯。将节点 ${i} 移出当前团。` });
+        } else {
+            recordState('PRUNE_CONFLICT', { 
+                node: i, 
+                conflict: conflictNode,
+                msg: `【冲突剪枝】节点 ${i} 无法加入当前团。它与团内节点 ${conflictNode} 不存在边相连。` 
+            });
+        }
+
+        // 分支 2：不包含节点 i
+        recordState('SKIP', { node: i, msg: `进入节点 ${i} 的 "不包含" 分支（跳过节点 ${i}）。` });
+        backtrack(i + 1); // 递归
+    }
+
+    // 初始化运行算法收集状态
+    recordState('START', { msg: '算法开始。初始最大团为空。' });
+    backtrack(0);
+    recordState('END', { msg: `算法结束。最终最大团为：[${globalMaxClique.join(', ')}]` });
+
+    // --- 3. 渲染与动画控制 ---
+    const canvas = document.getElementById('graphCanvas');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+    let nodePositions = [];
+    
+    let currentStateIndex = 0;
+    let timer = null;
+    const DELAY = 800; // 动画帧间隔(ms)
+
+    function resizeCanvas() {
+        const container = document.getElementById('canvas-container');
+        width = container.clientWidth;
+        height = container.clientHeight;
+        canvas.width = width;
+        canvas.height = height;
+        calculateNodePositions();
+        renderState(states[currentStateIndex]);
+    }
+
+    // 计算节点在画布上的位置 (圆形布局)
+    function calculateNodePositions() {
+        nodePositions = [];
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const radius = Math.min(width, height) / 2 * 0.7; // 占据 70% 空间
+
+        for (let i = 0; i < numNodes; i++) {
+            const angle = (i / numNodes) * 2 * Math.PI - Math.PI / 2; // 从顶部开始
+            nodePositions.push({
+                x: centerX + radius * Math.cos(angle),
+                y: centerY + radius * Math.sin(angle)
+            });
+        }
+    }
+
+    function drawGraph(state) {
+        ctx.clearRect(0, 0, width, height);
+        
+        const { currentClique, type, node, conflict } = state;
+
+        // 绘制边
+        ctx.lineWidth = 2;
+        for (let i = 0; i < numNodes; i++) {
+            for (let j = i + 1; j < numNodes; j++) {
+                if (adj[i][j]) {
+                    const inClique = currentClique.includes(i) && currentClique.includes(j);
+                    
+                    if (inClique) {
+                        ctx.strokeStyle = '#22c55e'; // 团内连线：绿色
+                        ctx.lineWidth = 4;
+                    } else if ((type === 'ADD' || type === 'CONSIDER') && 
+                               ((node === i && currentClique.includes(j)) || (node === j && currentClique.includes(i)))) {
+                        ctx.strokeStyle = '#eab308'; // 正在测试的连线：黄色
+                        ctx.lineWidth = 2;
+                    } else {
+                        ctx.strokeStyle = '#cbd5e1'; // 普通连线：浅灰
+                        ctx.lineWidth = 1.5;
+                    }
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(nodePositions[i].x, nodePositions[i].y);
+                    ctx.lineTo(nodePositions[j].x, nodePositions[j].y);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        // 绘制缺失的边 (导致冲突的原因)
+        if (type === 'PRUNE_CONFLICT' && conflict !== undefined) {
+            ctx.strokeStyle = '#ef4444'; // 红色虚线
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            ctx.moveTo(nodePositions[node].x, nodePositions[node].y);
+            ctx.lineTo(nodePositions[conflict].x, nodePositions[conflict].y);
+            ctx.stroke();
+            ctx.setLineDash([]); // 恢复实线
+        }
+
+        // 绘制节点
+        for (let i = 0; i < numNodes; i++) {
+            ctx.beginPath();
+            ctx.arc(nodePositions[i].x, nodePositions[i].y, 20, 0, 2 * Math.PI);
+            
+            // 节点颜色逻辑
+            if (currentClique.includes(i)) {
+                ctx.fillStyle = '#22c55e'; // 绿色 (在团内)
+                ctx.strokeStyle = '#166534';
+            } else if (type === 'CONSIDER' && node === i) {
+                ctx.fillStyle = '#fde047'; // 黄色 (正在考察)
+                ctx.strokeStyle = '#a16207';
+            } else if (type === 'PRUNE_CONFLICT' && node === i) {
+                ctx.fillStyle = '#fca5a5'; // 浅红 (考察失败)
+                ctx.strokeStyle = '#991b1b';
+            } else if (type === 'PRUNE_BOUND' && node === i) {
+                ctx.fillStyle = '#f87171'; // 红色 (边界剪枝)
+                ctx.strokeStyle = '#991b1b';
+            } else if (type === 'PRUNE_CONFLICT' && conflict === i) {
+                ctx.fillStyle = '#ef4444'; // 红色 (冲突目标)
+                ctx.strokeStyle = '#991b1b';
+            } else {
+                ctx.fillStyle = '#e2e8f0'; // 默认灰
+                ctx.strokeStyle = '#64748b';
+            }
+
+            // 叶子节点新最大团的闪烁效果 (简化为全局高亮)
+            if (type === 'NEW_MAX' && currentClique.includes(i)) {
+                ctx.fillStyle = '#10b981'; // 亮绿
+                ctx.shadowColor = '#34d399';
+                ctx.shadowBlur = 10;
+            } else {
+                ctx.shadowBlur = 0;
+            }
+
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // 绘制节点文本
+            ctx.fillStyle = '#1e293b';
+            if (currentClique.includes(i) || (type === 'NEW_MAX' && currentClique.includes(i))) {
+                ctx.fillStyle = '#ffffff';
+            }
+            ctx.font = 'bold 16px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(i, nodePositions[i].x, nodePositions[i].y);
+        }
+    }
+
+    function appendLog(state, index) {
+        const logContainer = document.getElementById('log-container');
+        const logItem = document.createElement('div');
+        
+        // 根据状态类型设置日志样式
+        let bgClass = 'bg-white';
+        let borderClass = 'border-l-4 border-gray-300';
+        
+        if (state.type.includes('PRUNE')) {
+            bgClass = 'bg-red-50';
+            borderClass = 'border-l-4 border-red-500';
+        } else if (state.type === 'ADD' || state.type === 'NEW_MAX') {
+            bgClass = 'bg-green-50';
+            borderClass = 'border-l-4 border-green-500';
+        } else if (state.type === 'BACKTRACK' || state.type === 'SKIP') {
+            bgClass = 'bg-orange-50';
+            borderClass = 'border-l-4 border-orange-400';
+        } else if (state.type === 'CONSIDER') {
+            bgClass = 'bg-blue-50';
+            borderClass = 'border-l-4 border-blue-400';
+        }
+
+        logItem.className = `p-2 rounded shadow-sm text-gray-700 ${bgClass} ${borderClass} transition-all`;
+        logItem.innerHTML = `<span class="font-mono text-xs text-gray-500 mr-2">[Step ${index}]</span> ${state.msg}`;
+        
+        logContainer.appendChild(logItem);
+        // 滚动到底部
+        logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    function renderState(state) {
+        if (!state) return;
+        
+        // 1. 绘制图
+        drawGraph(state);
+        
+        // 2. 更新统计面板
+        document.getElementById('stat-max-size').textContent = state.maxSize;
+        document.getElementById('stat-max-nodes').textContent = `[${state.maxClique.join(', ')}]`;
+
+        // 3. 更新日志 (只追加新的)
+        const currentLogs = document.getElementById('log-container').children.length;
+        if (currentStateIndex >= currentLogs) {
+             appendLog(state, currentStateIndex);
+        } else if (currentStateIndex === 0) {
+             // 重置日志
+             document.getElementById('log-container').innerHTML = '';
+             appendLog(state, currentStateIndex);
+        }
+    }
+
+    // --- 4. 交互逻辑 ---
+    document.getElementById('btn-step').addEventListener('click', () => {
+        if (currentStateIndex < states.length - 1) {
+            currentStateIndex++;
+            renderState(states[currentStateIndex]);
+        }
+    });
+
+    document.getElementById('btn-reset').addEventListener('click', () => {
+        pause();
+        currentStateIndex = 0;
+        document.getElementById('log-container').innerHTML = '';
+        renderState(states[currentStateIndex]);
+    });
+
+    function play() {
+        document.getElementById('btn-start').classList.add('hidden');
+        document.getElementById('btn-pause').classList.remove('hidden');
+        timer = setInterval(() => {
+            if (currentStateIndex < states.length - 1) {
+                currentStateIndex++;
+                renderState(states[currentStateIndex]);
+            } else {
+                pause();
+            }
+        }, DELAY);
+    }
+
+    function pause() {
+        document.getElementById('btn-start').classList.remove('hidden');
+        document.getElementById('btn-pause').classList.add('hidden');
+        if (timer) clearInterval(timer);
+        timer = null;
+    }
+
+    document.getElementById('btn-start').addEventListener('click', play);
+    document.getElementById('btn-pause').addEventListener('click', pause);
+
+    window.addEventListener('resize', resizeCanvas);
+    
+    // 初始化
+    resizeCanvas();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多边形游戏 - 动态规划矩阵推导可视化</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 React 运行时以支持复杂的 DP 状态矩阵渲染 -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; background-color: #f8fafc; }
+        .dp-grid { display: grid; gap: 2px; background-color: #e2e8f0; border: 1px solid #cbd5e1; padding: 2px; }
+        .dp-cell { 
+            background-color: white; 
+            display: flex; flex-direction: column; align-items: center; justify-content: center; 
+            font-size: 0.85rem; height: 3rem; transition: all 0.2s;
+        }
+        .dp-cell-empty { background-color: #f1f5f9; color: #cbd5e1; }
+        .cell-target { background-color: #fef08a !important; font-weight: bold; border: 2px solid #eab308; } /* Yellow */
+        .cell-left { background-color: #bfdbfe !important; border: 2px solid #3b82f6; } /* Blue */
+        .cell-right { background-color: #bbf7d0 !important; border: 2px solid #22c55e; } /* Green */
+        .cell-done { background-color: #f3f4f6; }
+    </style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    // 核心 DP 引擎：不仅计算结果，而且生成每一步状态转移的快照
+    function generateDPSteps(vertices, edges) {
+        const N = vertices.length;
+        const L = 2 * N - 1; // 破环成链的长度
+        const V = [...vertices, ...vertices.slice(0, N - 1)];
+        const E = [...edges, ...edges.slice(0, N - 2)];
+
+        const steps = [];
+        const dpMax = Array.from({length: L}, () => Array(L).fill(null));
+        const dpMin = Array.from({length: L}, () => Array(L).fill(null));
+
+        const cloneMatrix = (matrix) => matrix.map(row => [...row]);
+
+        // 1. 初始化对角线
+        for(let i = 0; i < L; i++) {
+            dpMax[i][i] = V[i];
+            dpMin[i][i] = V[i];
+        }
+
+        steps.push({
+            type: 'INIT',
+            msg: '阶段 1: 破环成链并初始化。长度为 1 的区间，其最大值和最小值即为顶点本身（矩阵的对角线）。',
+            dpMax: cloneMatrix(dpMax),
+            dpMin: cloneMatrix(dpMin),
+            highlights: { target: null, left: null, right: null },
+            details: null
+        });
+
+        // 2. 区间 DP 核心循环
+        for (let len = 2; len <= N; len++) {
+            for (let i = 0; i <= L - len; i++) {
+                let j = i + len - 1;
+                let currentMax = -Infinity;
+                let currentMin = Infinity;
+
+                for (let k = i; k < j; k++) {
+                    let op = E[k];
+                    let leftMax = dpMax[i][k];
+                    let leftMin = dpMin[i][k];
+                    let rightMax = dpMax[k+1][j];
+                    let rightMin = dpMin[k+1][j];
+
+                    let candidates = [];
+                    
+                    if (op === '+') {
+                        let cMax = leftMax + rightMax;
+                        let cMin = leftMin + rightMin;
+                        candidates = [
+                            { label: 'Max + Max', val: cMax },
+                            { label: 'Min + Min', val: cMin }
+                        ];
+                        currentMax = Math.max(currentMax, cMax);
+                        currentMin = Math.min(currentMin, cMin);
+                    } else if (op === '*') {
+                        let v1 = leftMax * rightMax;
+                        let v2 = leftMax * rightMin;
+                        let v3 = leftMin * rightMax;
+                        let v4 = leftMin * rightMin;
+                        candidates = [
+                            { label: 'Max × Max', val: v1, exp: `${leftMax} × ${rightMax}` },
+                            { label: 'Max × Min', val: v2, exp: `${leftMax} × ${rightMin}` },
+                            { label: 'Min × Max', val: v3, exp: `${leftMin} × ${rightMax}` },
+                            { label: 'Min × Min', val: v4, exp: `${leftMin} × ${rightMin}` }
+                        ];
+                        currentMax = Math.max(currentMax, v1, v2, v3, v4);
+                        currentMin = Math.min(currentMin, v1, v2, v3, v4);
+                    }
+
+                    steps.push({
+                        type: 'CALC',
+                        msg: `正在计算区间 [${i}, ${j}] (长度 ${len})。尝试分割点 k=${k}，运算符为 '${op}'。`,
+                        dpMax: cloneMatrix(dpMax), 
+                        dpMin: cloneMatrix(dpMin),
+                        highlights: { target: [i, j], left: [i, k], right: [k+1, j], k: k },
+                        details: {
+                            i, j, k, op,
+                            leftMax, leftMin, rightMax, rightMin,
+                            candidates,
+                            tempMax: currentMax,
+                            tempMin: currentMin
+                        }
+                    });
+                }
+
+                // 完成一个单元格的计算
+                dpMax[i][j] = currentMax;
+                dpMin[i][j] = currentMin;
+
+                steps.push({
+                    type: 'CELL_DONE',
+                    msg: `完成区间 [${i}, ${j}] 状态转移计算。最终 Max=${currentMax}, Min=${currentMin}`,
+                    dpMax: cloneMatrix(dpMax),
+                    dpMin: cloneMatrix(dpMin),
+                    highlights: { target: [i, j], left: null, right: null },
+                    details: null
+                });
+            }
+        }
+
+        // 3. 寻找全局最优解
+        let globalMax = -Infinity;
+        let bestStart = -1;
+        for (let i = 0; i < N; i++) {
+            if (dpMax[i][i + N - 1] > globalMax) {
+                globalMax = dpMax[i][i + N - 1];
+                bestStart = i;
+            }
+        }
+
+        steps.push({
+            type: 'DONE',
+            msg: `计算结束！遍历所有长度为 ${N} 的区间。最大值为 ${globalMax}，来源于截取区间 [${bestStart}, ${bestStart + N - 1}]。`,
+            dpMax: cloneMatrix(dpMax),
+            dpMin: cloneMatrix(dpMin),
+            highlights: { target: [bestStart, bestStart + N - 1], left: null, right: null },
+            details: { globalMax, bestStart }
+        });
+
+        return { steps, V, E, L, N };
+    }
+
+    // 主 React 组件
+    function PolygonDPVisualizer() {
+        // 算例：包含负数与乘法，N=5 (长度适中，方便矩阵展示)
+        const initialVertices = [-2, 3, -1, 4, -3];
+        const initialEdges = ['*', '+', '*', '+', '*'];
+        
+        const { steps, V, E, L, N } = useMemo(() => generateDPSteps(initialVertices, initialEdges), []);
+        const [currentStepIdx, setCurrentStepIdx] = useState(0);
+
+        const step = steps[currentStepIdx];
+        const { dpMax, dpMin, highlights, details } = step;
+
+        const getCellClass = (i, j) => {
+            if (j < i || j - i >= N) return 'dp-cell dp-cell-empty'; // 无效区域
+            
+            let classes = 'dp-cell';
+            if (dpMax[i][j] !== null) classes += ' cell-done';
+            
+            if (highlights) {
+                if (highlights.target && highlights.target[0] === i && highlights.target[1] === j) classes += ' cell-target';
+                else if (highlights.left && highlights.left[0] === i && highlights.left[1] === j) classes += ' cell-left';
+                else if (highlights.right && highlights.right[0] === i && highlights.right[1] === j) classes += ' cell-right';
+            }
+            return classes;
+        };
+
+        return (
+            <div className="max-w-7xl mx-auto p-6 text-gray-800">
+                <div className="mb-6">
+                    <h1 className="text-3xl font-bold mb-2">多边形游戏 - 区间 DP 状态转移解剖</h1>
+                    <p className="text-gray-600">摒弃只看结果的动画，本界面将直接可视化动态规划的核心：<strong className="text-blue-600">重叠子问题依赖、状态膨胀(正负判定) 与 矩阵填表拓扑序。</strong></p>
+                </div>
+
+                {/* 破环成链展示区 */}
+                <div className="bg-white p-4 rounded shadow mb-6 border-l-4 border-indigo-500">
+                    <h3 className="font-bold text-gray-700 mb-2">破环成链序列 (长度 2N-1 = {L})</h3>
+                    <div className="flex flex-wrap items-center gap-1 font-mono text-lg">
+                        {V.map((v, idx) => (
+                            <React.Fragment key={`chain-${idx}`}>
+                                <span className={`px-2 py-1 rounded border ${
+                                    details && idx >= details.i && idx <= details.j ? 
+                                        (details.k !== undefined && idx <= details.k ? 'bg-blue-100 border-blue-400' : 'bg-green-100 border-green-400')
+                                        : 'bg-gray-100 border-gray-300'
+                                }`}>
+                                    V<sub className="text-xs">{idx}</sub>:{v}
+                                </span>
+                                {idx < L - 1 && (
+                                    <span className={`font-bold w-6 text-center ${details && details.k === idx ? 'text-red-500 text-2xl' : 'text-gray-400'}`}>
+                                        {E[idx]}
+                                    </span>
+                                )}
+                            </React.Fragment>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="flex flex-col gap-8">
+                    {/* DP 矩阵展示 */}
+                    <div className="w-full">
+                        <div className="flex gap-8 overflow-x-auto justify-center">
+                            {/* Max 矩阵 */}
+                            <div className="bg-white p-4 rounded shadow min-w-max">
+                                <h3 className="font-bold text-center mb-2">Max[i][j] (最大值表)</h3>
+                                <div className="dp-grid" style={{ gridTemplateColumns: `repeat(${L}, 3rem)` }}>
+                                    {dpMax.map((row, i) => row.map((val, j) => (
+                                        <div key={`max-${i}-${j}`} className={getCellClass(i, j)}>
+                                            {val !== null && (j >= i && j - i < N) ? val : ''}
+                                        </div>
+                                    )))}
+                                </div>
+                            </div>
+
+                            {/* Min 矩阵 */}
+                            <div className="bg-white p-4 rounded shadow min-w-max">
+                                <h3 className="font-bold text-center mb-2">Min[i][j] (最小值表)</h3>
+                                <div className="dp-grid" style={{ gridTemplateColumns: `repeat(${L}, 3rem)` }}>
+                                    {dpMin.map((row, i) => row.map((val, j) => (
+                                        <div key={`min-${i}-${j}`} className={getCellClass(i, j)}>
+                                            {val !== null && (j >= i && j - i < N) ? val : ''}
+                                        </div>
+                                    )))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 状态转移解析面板 - 固定高度，锁定底部按钮 */}
+                    <div className="w-full bg-white p-6 rounded shadow flex flex-col h-[550px]">
+                        <h2 className="text-xl font-bold mb-4 border-b pb-2 shrink-0">当前计算解析 (状态转移方程)</h2>
+                        <div className="bg-blue-50 text-blue-800 p-3 rounded mb-6 text-base font-medium shrink-0 min-h-[4.5rem] flex items-center">
+                            {step.msg}
+                        </div>
+                        
+                        <div className="w-full mb-6 flex-1 overflow-y-auto">
+                            {details && step.type === 'CALC' && (
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
+                                    <div className="flex flex-col gap-3">
+                                        <div className="p-3 bg-blue-100 rounded border border-blue-300 flex-1">
+                                            <div className="font-bold text-blue-800 mb-1">左区间 [{details.i},{details.k}]</div>
+                                            <div className="text-base">Max: {details.leftMax}</div>
+                                            <div className="text-base">Min: {details.leftMin}</div>
+                                        </div>
+                                        <div className="p-3 bg-green-100 rounded border border-green-300 flex-1">
+                                            <div className="font-bold text-green-800 mb-1">右区间 [{details.k+1},{details.j}]</div>
+                                            <div className="text-base">Max: {details.rightMax}</div>
+                                            <div className="text-base">Min: {details.rightMin}</div>
+                                        </div>
+                                    </div>
+
+                                    <div className="p-4 border rounded bg-gray-50 shadow-inner">
+                                        <div className="font-bold mb-3 pb-2 border-b m-[-10px]">
+                                            操作符: <span className="text-red-500 text-2xl mx-2 align-middle">{details.op}</span>
+                                        </div>
+                                        <div className="space-y-2">
+                                            {details.candidates.map((c, i) => (
+                                                <div key={i} className="flex justify-between items-center bg-white p-2 border rounded">
+                                                    <span className="text-gray-600">{c.label} ({c.exp}):</span>
+                                                    <span className="font-mono font-bold text-base">{c.val}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="p-5 bg-yellow-50 border border-yellow-400 rounded flex flex-col justify-center shadow-sm">
+                                        <div className="font-bold text-yellow-800 mb-4 pb-2 border-b border-yellow-300">当前已枚举的极致状态：</div>
+                                        <div className="text-red-600 font-bold text-lg mb-3">Max[{details.i}][{details.j}] 暂定 = {details.tempMax}</div>
+                                        <div className="text-blue-600 font-bold text-lg">Min[{details.i}][{details.j}] 暂定 = {details.tempMin}</div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {details && step.type === 'DONE' && (
+                                <div className="p-6 bg-green-100 text-green-800 rounded font-bold text-2xl text-center h-full flex items-center justify-center">
+                                    最终结果: {details.globalMax}
+                                </div>
+                            )}
+                            
+                            {(!details || (step.type !== 'CALC' && step.type !== 'DONE')) && (
+                                <div className="h-full flex items-center justify-center text-gray-400 italic">
+                                    当前阶段仅进行数据初始化或状态写入，无额外计算明细。
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 控制器 - 使用 mt-auto 推至最底部 */}
+                        <div className="pt-4 border-t flex flex-col gap-3 mt-auto shrink-0">
+                            <div className="flex justify-between text-sm text-gray-500 font-mono">
+                                <span>Step: {currentStepIdx + 1} / {steps.length}</span>
+                                <span>Progress: {Math.round((currentStepIdx + 1) / steps.length * 100)}%</span>
+                            </div>
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={() => setCurrentStepIdx(0)}
+                                    className="px-3 py-2 bg-gray-200 hover:bg-gray-300 rounded transition"
+                                >重置</button>
+                                <button 
+                                    onClick={() => setCurrentStepIdx(prev => Math.max(0, prev - 1))}
+                                    disabled={currentStepIdx === 0}
+                                    className="flex-1 bg-indigo-500 hover:bg-indigo-600 text-white rounded transition disabled:opacity-50"
+                                >上一步</button>
+                                <button 
+                                    onClick={() => setCurrentStepIdx(prev => Math.min(steps.length - 1, prev + 1))}
+                                    disabled={currentStepIdx === steps.length - 1}
+                                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-bold transition disabled:opacity-50"
+                                >下一步</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<PolygonDPVisualizer />);
+</script>
+</body>
+</html>

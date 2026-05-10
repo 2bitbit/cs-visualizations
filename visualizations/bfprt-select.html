@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BFPRT 线性时间选择可视化</title>
+    <!-- 引入 React 和 ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- 引入 Babel 用于解析 JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #f3f4f6; margin: 0; padding: 0; font-family: sans-serif; }
+        canvas { outline: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // 颜色常量配置
+        const COLORS = {
+            TEXT_DARK: '#1f2937',
+            TEXT_LIGHT: '#ffffff',
+            BACKGROUND: '#ffffff',
+            INACTIVE: '#e5e7eb',
+            DEFAULT: '#93c5fd', // 蓝色
+            GROUP_BORDER: '#374151',
+            MEDIAN: '#f97316', // 橙色
+            PIVOT: '#ef4444', // 红色
+            LEFT_PARTITION: '#fef08a', // 黄色
+            RIGHT_PARTITION: '#bfdbfe', // 浅蓝
+            TARGET_FOUND: '#22c55e' // 绿色
+        };
+
+        // 核心：生成算法追踪数据的函数 (不直接修改原数组以维持状态隔离)
+        function generateBFPRTTrace(initialArray, targetK) {
+            let trace = [];
+            let currentArr = [...initialArray];
+
+            // 交换辅助函数
+            const swap = (arr, i, j) => {
+                let temp = arr[i];
+                arr[i] = arr[j];
+                arr[j] = temp;
+            };
+
+            // 插入排序辅助函数 (返回中位数索引)
+            const insertionSortAndGetMedian = (arr, left, right) => {
+                for (let i = left + 1; i <= right; i++) {
+                    let key = arr[i];
+                    let j = i - 1;
+                    while (j >= left && arr[j] > key) {
+                        arr[j + 1] = arr[j];
+                        j--;
+                    }
+                    arr[j + 1] = key;
+                }
+                return left + Math.floor((right - left) / 2);
+            };
+
+            // 划分算法
+            const partition = (arr, left, right, pivotIndex) => {
+                let pivotValue = arr[pivotIndex];
+                swap(arr, pivotIndex, right); // 移到末尾
+                let storeIndex = left;
+                for (let i = left; i < right; i++) {
+                    if (arr[i] < pivotValue) {
+                        swap(arr, i, storeIndex);
+                        storeIndex++;
+                    }
+                }
+                swap(arr, storeIndex, right); // 移回中间
+                return storeIndex;
+            };
+
+            // 寻找中位数的中位数 (为了简化可视化嵌套深度，此步骤简化记录，但逻辑严格)
+            const getMedianOfMedians = (arr, left, right) => {
+                let numElements = right - left + 1;
+                let medians = [];
+                let groups = [];
+                let groupMediansIndices = [];
+
+                // 步骤 1 & 2: 分组与组内排序
+                for (let i = 0; i < numElements; i += 5) {
+                    let subLeft = left + i;
+                    let subRight = Math.min(left + i + 4, right);
+                    groups.push([subLeft, subRight]);
+                    let medianIndex = insertionSortAndGetMedian(arr, subLeft, subRight);
+                    groupMediansIndices.push(medianIndex);
+                    medians.push(arr[medianIndex]);
+                }
+
+                trace.push({
+                    type: 'GROUPING_AND_SORTING',
+                    arr: [...arr],
+                    left, right,
+                    groups: groups,
+                    msg: `在区间 [${left}, ${right}] 内，将元素每 5 个分一组，并对组内进行排序。`
+                });
+
+                trace.push({
+                    type: 'MEDIANS_HIGHLIGHT',
+                    arr: [...arr],
+                    left, right,
+                    groups: groups,
+                    medianIndices: groupMediansIndices,
+                    msg: `提取每组的中位数（橙色高亮）。`
+                });
+
+                // 为了找到基准，理论上应递归，这里用简化的排序直接找出（以保持最顶层视图清晰，不陷入多重数组栈）
+                // 因为目标是解释主流程。
+                medians.sort((a, b) => a - b);
+                let pivotValue = medians[Math.floor(medians.length / 2)];
+                
+                // 找到基准值在当前数组中的原始索引
+                let pivotOriginalIndex = left;
+                for(let i = left; i <= right; i++) {
+                    if(arr[i] === pivotValue) {
+                        pivotOriginalIndex = i;
+                        break;
+                    }
+                }
+
+                trace.push({
+                    type: 'PIVOT_SELECTED',
+                    arr: [...arr],
+                    left, right,
+                    pivotIndex: pivotOriginalIndex,
+                    msg: `递归寻找这些中位数的中位数。选定基准值 (Pivot) 为 ${pivotValue}（红色高亮）。`
+                });
+
+                return pivotOriginalIndex;
+            };
+
+            // BFPRT 主递归函数
+            const bfprtSelect = (arr, left, right, kOffset) => {
+                trace.push({
+                    type: 'INIT_SEARCH',
+                    arr: [...arr],
+                    left, right,
+                    targetK: kOffset,
+                    msg: `开始在区间 [${left}, ${right}] 内寻找第 ${kOffset} 小的元素。`
+                });
+
+                if (left === right) {
+                    trace.push({
+                        type: 'FOUND',
+                        arr: [...arr],
+                        left, right,
+                        foundIndex: left,
+                        msg: `区间仅剩一个元素，已找到目标值: ${arr[left]}。`
+                    });
+                    return arr[left];
+                }
+
+                let pivotIndex = getMedianOfMedians(arr, left, right);
+                let pivotValue = arr[pivotIndex];
+
+                let finalPivotIndex = partition(arr, left, right, pivotIndex);
+
+                trace.push({
+                    type: 'PARTITIONED',
+                    arr: [...arr],
+                    left, right,
+                    pivotIndex: finalPivotIndex,
+                    msg: `以 ${pivotValue} 为基准进行划分：小于它的元素（黄色）在左，大于它的（蓝色）在右。基准值最终落在索引 ${finalPivotIndex}。`
+                });
+
+                let numLeftElements = finalPivotIndex - left + 1; // 包含 pivot 本身，视为属于左侧或右侧的基准边界
+
+                if (kOffset === numLeftElements) {
+                    trace.push({
+                        type: 'FOUND',
+                        arr: [...arr],
+                        left, right,
+                        foundIndex: finalPivotIndex,
+                        msg: `目标位次 ${kOffset} 恰好等于基准值相对位次 ${numLeftElements}。找到目标值: ${arr[finalPivotIndex]}。`
+                    });
+                    return arr[finalPivotIndex];
+                } else if (kOffset < numLeftElements) {
+                    trace.push({
+                        type: 'DECISION',
+                        arr: [...arr],
+                        left, right,
+                        msg: `目标位次 ${kOffset} < 基准相对位次 ${numLeftElements}。递归搜索左侧子区间 [${left}, ${finalPivotIndex - 1}]。`
+                    });
+                    return bfprtSelect(arr, left, finalPivotIndex - 1, kOffset);
+                } else {
+                    let newK = kOffset - numLeftElements;
+                    trace.push({
+                        type: 'DECISION',
+                        arr: [...arr],
+                        left, right,
+                        msg: `目标位次 ${kOffset} > 基准相对位次 ${numLeftElements}。递归搜索右侧子区间 [${finalPivotIndex + 1}, ${right}]，寻找第 ${newK} 小元素。`
+                    });
+                    return bfprtSelect(arr, finalPivotIndex + 1, right, newK);
+                }
+            };
+
+            bfprtSelect(currentArr, 0, currentArr.length - 1, targetK);
+            return trace;
+        }
+
+
+        // 主应用组件
+        const App = () => {
+            const canvasRef = useRef(null);
+            
+            // 预设一个精心构造的复杂数组，迫使算法进行多次深度递归分支（左侧与右侧）
+            const INITIAL_DATA = [64, 34, 25, 12, 22, 11, 90, 45, 33, 20, 55, 41, 78, 59, 81, 10, 3, 99, 15, 66, 70, 88, 30, 49, 1];
+            const TARGET_K = 5; 
+
+            // 生成静态的执行追踪数据
+            const traceData = useMemo(() => generateBFPRTTrace([...INITIAL_DATA], TARGET_K), []);
+            
+            const [currentStep, setCurrentStep] = useState(0);
+
+            const handleNext = () => setCurrentStep(prev => Math.min(prev + 1, traceData.length - 1));
+            const handlePrev = () => setCurrentStep(prev => Math.max(prev - 1, 0));
+            const handleReset = () => setCurrentStep(0);
+
+            // Canvas 绘制逻辑
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                const width = canvas.width;
+                const height = canvas.height;
+                
+                // 清空画布
+                ctx.clearRect(0, 0, width, height);
+
+                const stepData = traceData[currentStep];
+                if (!stepData) return;
+
+                const { arr, left, right, type } = stepData;
+                const n = arr.length;
+                
+                // 布局参数
+                const padding = 20;
+                const topMargin = 60;
+                const availableWidth = width - 2 * padding;
+                const cellWidth = availableWidth / n;
+                const cellHeight = 50;
+
+                // 绘制标题信息
+                ctx.fillStyle = COLORS.TEXT_DARK;
+                ctx.font = '16px sans-serif';
+                ctx.textAlign = 'left';
+                ctx.fillText(`总元素: ${n} | 目标: 寻找第 ${TARGET_K} 小元素`, padding, 30);
+
+                // 遍历绘制数组元素
+                for (let i = 0; i < n; i++) {
+                    const x = padding + i * cellWidth;
+                    const y = topMargin;
+
+                    // 决定填充颜色
+                    let bgColor = COLORS.DEFAULT;
+                    let isInactive = (i < left || i > right);
+
+                    if (isInactive) {
+                        bgColor = COLORS.INACTIVE;
+                    } else {
+                        // 根据当前步骤类型应用特殊颜色
+                        if (type === 'MEDIANS_HIGHLIGHT') {
+                            if (stepData.medianIndices.includes(i)) bgColor = COLORS.MEDIAN;
+                        } 
+                        else if (type === 'PIVOT_SELECTED') {
+                            if (i === stepData.pivotIndex) bgColor = COLORS.PIVOT;
+                        }
+                        else if (type === 'PARTITIONED') {
+                            if (i === stepData.pivotIndex) bgColor = COLORS.PIVOT;
+                            else if (i < stepData.pivotIndex) bgColor = COLORS.LEFT_PARTITION;
+                            else if (i > stepData.pivotIndex) bgColor = COLORS.RIGHT_PARTITION;
+                        }
+                        else if (type === 'FOUND') {
+                            if (i === stepData.foundIndex) bgColor = COLORS.TARGET_FOUND;
+                        }
+                    }
+
+                    // 绘制矩形背景
+                    ctx.fillStyle = bgColor;
+                    // 留出微小间隙
+                    ctx.fillRect(x + 2, y, cellWidth - 4, cellHeight);
+                    
+                    // 绘制边框
+                    ctx.strokeStyle = COLORS.TEXT_DARK;
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(x + 2, y, cellWidth - 4, cellHeight);
+
+                    // 绘制文本 (数组值)
+                    ctx.fillStyle = isInactive ? '#9ca3af' : COLORS.TEXT_DARK;
+                    ctx.font = 'bold 16px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(arr[i], x + cellWidth / 2, y + cellHeight / 2);
+
+                    // 绘制索引标号
+                    ctx.fillStyle = '#6b7280';
+                    ctx.font = '10px sans-serif';
+                    ctx.fillText(i, x + cellWidth / 2, y + cellHeight + 15);
+                }
+
+                // 额外绘制逻辑：分组高亮边框
+                // 修复了由于 isInactive 在循环外部无法访问而导致的 ReferenceError
+                if (type === 'GROUPING_AND_SORTING' || type === 'MEDIANS_HIGHLIGHT') {
+                    stepData.groups.forEach(group => {
+                        const startIdx = group[0];
+                        const endIdx = group[1];
+                        const groupX = padding + startIdx * cellWidth;
+                        const groupWidth = (endIdx - startIdx + 1) * cellWidth;
+                        
+                        ctx.strokeStyle = COLORS.GROUP_BORDER;
+                        ctx.lineWidth = 3;
+                        ctx.setLineDash([5, 5]);
+                        ctx.strokeRect(groupX + 1, topMargin - 4, groupWidth - 2, cellHeight + 8);
+                        ctx.setLineDash([]); // 重置实线
+                    });
+                }
+                
+                // 绘制当前搜索区间标识线
+                if (left !== undefined && right !== undefined) {
+                    const startX = padding + left * cellWidth;
+                    const endX = padding + right * cellWidth + cellWidth;
+                    ctx.strokeStyle = '#3b82f6';
+                    ctx.lineWidth = 4;
+                    ctx.beginPath();
+                    ctx.moveTo(startX, topMargin + cellHeight + 35);
+                    ctx.lineTo(endX, topMargin + cellHeight + 35);
+                    ctx.stroke();
+                    
+                    // 左侧竖线
+                    ctx.beginPath();
+                    ctx.moveTo(startX, topMargin + cellHeight + 25);
+                    ctx.lineTo(startX, topMargin + cellHeight + 45);
+                    ctx.stroke();
+                    
+                    // 右侧竖线
+                    ctx.beginPath();
+                    ctx.moveTo(endX, topMargin + cellHeight + 25);
+                    ctx.lineTo(endX, topMargin + cellHeight + 45);
+                    ctx.stroke();
+                    
+                    ctx.fillStyle = '#3b82f6';
+                    ctx.font = '12px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('当前搜索区间', startX + (endX - startX)/2, topMargin + cellHeight + 55);
+                }
+
+            }, [currentStep, traceData]);
+
+            const currentTrace = traceData[currentStep];
+
+            return (
+                <div className="max-w-6xl mx-auto p-6 flex flex-col items-center">
+                    <div className="w-full bg-white rounded-xl shadow-lg p-6 mb-6">
+                        <h1 className="text-2xl font-bold text-gray-800 mb-4 border-b pb-2">线性时间选择 (BFPRT 算法) 可视化</h1>
+                        
+                        <div className="mb-4 flex flex-col items-center">
+                            <canvas 
+                                ref={canvasRef} 
+                                width={1000} 
+                                height={220} 
+                                className="border border-gray-200 rounded bg-gray-50 max-w-full"
+                            ></canvas>
+                        </div>
+
+                        <div className="bg-blue-50 border border-blue-200 rounded p-4 mb-6 min-h-[80px] flex items-center justify-center shadow-inner">
+                            <p className="text-lg text-blue-900 font-medium text-center">
+                                {currentTrace ? currentTrace.msg : "初始化中..."}
+                            </p>
+                        </div>
+
+                        <div className="flex justify-center items-center gap-4">
+                            <button 
+                                onClick={handleReset} 
+                                disabled={currentStep === 0}
+                                className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300 disabled:opacity-50 transition-colors"
+                            >
+                                重置
+                            </button>
+                            <button 
+                                onClick={handlePrev} 
+                                disabled={currentStep === 0}
+                                className="px-6 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600 disabled:opacity-50 font-semibold transition-colors"
+                            >
+                                上一步
+                            </button>
+                            <span className="text-gray-600 font-medium w-32 text-center">
+                                步骤 {currentStep + 1} / {traceData.length}
+                            </span>
+                            <button 
+                                onClick={handleNext} 
+                                disabled={currentStep === traceData.length - 1}
+                                className="px-6 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600 disabled:opacity-50 font-semibold transition-colors"
+                            >
+                                下一步
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div className="w-full bg-white rounded-xl shadow p-6 text-sm text-gray-700">
+                        <h3 className="font-bold text-gray-900 mb-2">图例说明：</h3>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="flex items-center gap-2"><div className="w-4 h-4 bg-gray-200 border border-gray-400"></div><span>非当前搜索区间</span></div>
+                            <div className="flex items-center gap-2"><div className="w-4 h-4 border-2 border-dashed border-gray-700"></div><span>5 元素分组</span></div>
+                            <div className="flex items-center gap-2"><div className="w-4 h-4 bg-orange-500 border border-gray-400"></div><span>组内中位数</span></div>
+                            <div className="flex items-center gap-2"><div className="w-4 h-4 bg-red-500 border border-gray-400"></div><span>选定的基准 (Pivot)</span></div>
+                            <div className="flex items-center gap-2"><div className="w-4 h-4 bg-yellow-200 border border-gray-400"></div><span>小于基准的元素 (左侧)</span></div>
+                            <div className="flex items-center gap-2"><div className="w-4 h-4 bg-blue-200 border border-gray-400"></div><span>大于基准的元素 (右侧)</span></div>
+                            <div className="flex items-center gap-2"><div className="w-4 h-4 bg-green-500 border border-gray-400"></div><span>最终目标元素</span></div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

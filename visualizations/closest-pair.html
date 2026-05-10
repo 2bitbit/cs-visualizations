@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>最近点对问题 - 分治法单步可视化</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #f3f4f6; font-family: sans-serif; }
+        canvas { background-color: #ffffff; border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
+        .log-container { scroll-behavior: smooth; }
+    </style>
+</head>
+<body class="h-screen flex flex-col p-4 md:p-8">
+    <div class="max-w-6xl w-full mx-auto flex-1 flex flex-col">
+        <header class="mb-4">
+            <h1 class="text-3xl font-bold text-gray-800">最近点对问题 (分治法)</h1>
+            <p class="text-gray-600 mt-2">支持单步执行的可视化演示。观察空间如何被分割，以及中间候选带 (Strip) 是如何进行过滤比较的。</p>
+        </header>
+
+        <div class="flex flex-col md:flex-row gap-4 flex-1 min-h-0">
+            <!-- 左侧：Canvas 区域 -->
+            <div class="flex-1 flex flex-col gap-4">
+                <canvas id="vizCanvas" class="w-full h-full object-contain cursor-crosshair border border-gray-200"></canvas>
+                <div class="flex gap-2">
+                    <button id="btnGenerate" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition">重新生成点集</button>
+                    <button id="btnPrev" class="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition disabled:opacity-50" disabled>上一步</button>
+                    <button id="btnNext" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition disabled:opacity-50">下一步</button>
+                    <button id="btnAuto" class="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 transition">自动播放</button>
+                </div>
+            </div>
+
+            <!-- 右侧：状态面板与日志 -->
+            <div class="w-full md:w-80 flex flex-col bg-white rounded-lg shadow-md border border-gray-200 overflow-hidden">
+                <div class="p-4 bg-gray-50 border-b border-gray-200">
+                    <h2 class="text-lg font-semibold text-gray-800">算法执行状态</h2>
+                    <p id="statusDist" class="text-sm text-gray-600 mt-1">当前全局最短距离: 无</p>
+                    <p id="statusStep" class="text-sm text-gray-600">步骤: 0 / 0</p>
+                </div>
+                <div id="logPanel" class="flex-1 overflow-y-auto p-4 flex flex-col gap-2 log-container bg-gray-50">
+                    <!-- 日志条目将在这里动态生成 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('vizCanvas');
+        const ctx = canvas.getContext('2d');
+        const logPanel = document.getElementById('logPanel');
+        const btnGenerate = document.getElementById('btnGenerate');
+        const btnPrev = document.getElementById('btnPrev');
+        const btnNext = document.getElementById('btnNext');
+        const btnAuto = document.getElementById('btnAuto');
+        const statusDist = document.getElementById('statusDist');
+        const statusStep = document.getElementById('statusStep');
+
+        let points = [];
+        let events = [];
+        let currentStep = -1;
+        let autoPlayInterval = null;
+        let globalMinDist = Infinity;
+
+        // 几何帮助函数
+        const dist = (p1, p2) => Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
+        
+        // 调整 Canvas 尺寸以适应高分屏
+        function resizeCanvas() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width * 2;
+            canvas.height = (rect.height - 50) * 2; // 减去按钮高度
+            ctx.scale(2, 2);
+            canvas.style.width = `${rect.width}px`;
+            canvas.style.height = `${rect.height - 50}px`;
+            drawStep(currentStep);
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        // 生成随机点集
+        function generatePoints(count = 15) {
+            const padding = 40;
+            const width = canvas.width / 2;
+            const height = canvas.height / 2;
+            points = [];
+            for (let i = 0; i < count; i++) {
+                points.push({
+                    id: i,
+                    x: padding + Math.random() * (width - padding * 2),
+                    y: padding + Math.random() * (height - padding * 2)
+                });
+            }
+            // 预处理：按 X 排序
+            points.sort((a, b) => a.x - b.x);
+            runAlgorithm();
+        }
+
+        // --- 核心分治算法，并在执行中插入 Event 记录 ---
+        function runAlgorithm() {
+            events = [];
+            events.push({ type: 'INIT', desc: `生成了 ${points.length} 个随机点，已按 X 坐标排序。`, activePoints: points.slice() });
+            
+            globalMinDist = Infinity;
+            solve(points.slice(), 0, canvas.width / 2);
+            
+            events.push({ type: 'END', desc: '算法执行完毕。', activePoints: points.slice() });
+            
+            currentStep = 0;
+            updateUI();
+        }
+
+        function solve(P, xMin, xMax) {
+            const n = P.length;
+            
+            // Base Case: 暴力法
+            if (n <= 3) {
+                let localMin = Infinity;
+                let bestPair = null;
+                events.push({ type: 'BASE_CASE', desc: `子集点数 <= 3 (共 ${n} 点)，使用暴力法求解。`, activePoints: P, xMin, xMax });
+                
+                for (let i = 0; i < n; ++i) {
+                    for (let j = i + 1; j < n; ++j) {
+                        let d = dist(P[i], P[j]);
+                        events.push({ type: 'COMPARE', p1: P[i], p2: P[j], d: d, desc: `暴力比对点对。`, activePoints: P, xMin, xMax });
+                        if (d < localMin) {
+                            localMin = d;
+                            bestPair = [P[i], P[j]];
+                        }
+                    }
+                }
+                events.push({ type: 'BASE_RESULT', d: localMin, pair: bestPair, desc: `该局部区域最小距离为 ${localMin.toFixed(2)}。`, activePoints: P, xMin, xMax });
+                return { d: localMin, pair: bestPair };
+            }
+
+            // Divide: 分割
+            const mid = Math.floor(n / 2);
+            const midPoint = P[mid];
+            const midX = midPoint.x;
+            
+            events.push({ type: 'DIVIDE', midX, desc: `按中位数 X=${midX.toFixed(1)} 将区域划分为左右两半。`, activePoints: P, xMin, xMax });
+
+            // Conquer: 递归
+            const leftRes = solve(P.slice(0, mid), xMin, midX);
+            const rightRes = solve(P.slice(mid), midX, xMax);
+
+            let d = Math.min(leftRes.d, rightRes.d);
+            let bestPair = leftRes.d < rightRes.d ? leftRes.pair : rightRes.pair;
+
+            events.push({ type: 'CONQUER_MERGE', midX, d, leftRes, rightRes, desc: `左右递归完成，当前最小距离 d = min(dL, dR) = ${d.toFixed(2)}。`, activePoints: P, xMin, xMax });
+
+            // Combine: 处理跨界候选带
+            events.push({ type: 'STRIP_CREATE', midX, d, desc: `建立候选带 (Strip): X 坐标在 [${(midX-d).toFixed(1)}, ${(midX+d).toFixed(1)}] 之间的点。`, activePoints: P, xMin, xMax });
+            
+            let strip = [];
+            for (let i = 0; i < n; i++) {
+                if (Math.abs(P[i].x - midX) < d) {
+                    strip.push(P[i]);
+                }
+            }
+
+            events.push({ type: 'STRIP_POINTS', midX, d, strip, desc: `在候选带中找到了 ${strip.length} 个点，准备按 Y 坐标排序。`, activePoints: P, xMin, xMax });
+            strip.sort((a, b) => a.y - b.y);
+
+            // 核心优化：线性扫描
+            for (let i = 0; i < strip.length; i++) {
+                // 最多检查后面 7 个点 (即 Y 距离小于 d 的点)
+                for (let j = i + 1; j < strip.length && (strip[j].y - strip[i].y) < d; j++) {
+                    let dStrip = dist(strip[i], strip[j]);
+                    events.push({ type: 'STRIP_COMPARE', p1: strip[i], p2: strip[j], d: dStrip, midX, limitD: d, strip, desc: `检查候选带内的点对。由于 Y 差距小于 d，执行距离计算。`, activePoints: P, xMin, xMax });
+                    
+                    if (dStrip < d) {
+                        d = dStrip;
+                        bestPair = [strip[i], strip[j]];
+                        events.push({ type: 'STRIP_UPDATE', p1: strip[i], p2: strip[j], d: dStrip, midX, desc: `【发现更小距离】更新最小距离为 ${d.toFixed(2)}！`, activePoints: P, xMin, xMax });
+                    }
+                }
+            }
+
+            events.push({ type: 'MERGE_DONE', d, pair: bestPair, midX, desc: `当前区域合并完成，最终最小距离为 ${d.toFixed(2)}。`, activePoints: P, xMin, xMax });
+            return { d, pair: bestPair };
+        }
+
+        // --- 绘图引擎 ---
+        function drawStep(stepIndex) {
+            if (stepIndex < 0 || stepIndex >= events.length) return;
+            const event = events[stepIndex];
+            const w = canvas.width / 2;
+            const h = canvas.height / 2;
+
+            // 清空画布
+            ctx.clearRect(0, 0, w, h);
+
+            // 绘制所有点 (底色，半透明)
+            ctx.fillStyle = '#cbd5e1'; // gray-300
+            for (let p of points) {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // 如果有区域限制，绘制区域边界线
+            if (event.xMin !== undefined && event.xMax !== undefined) {
+                ctx.fillStyle = 'rgba(243, 244, 246, 0.5)'; // gray-100 bg
+                ctx.fillRect(event.xMin, 0, event.xMax - event.xMin, h);
+                
+                ctx.strokeStyle = '#94a3b8'; // gray-400
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath();
+                ctx.moveTo(event.xMin, 0); ctx.lineTo(event.xMin, h);
+                ctx.moveTo(event.xMax, 0); ctx.lineTo(event.xMax, h);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // 绘制活跃的点 (深色)
+            if (event.activePoints) {
+                ctx.fillStyle = '#3b82f6'; // blue-500
+                for (let p of event.activePoints) {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            // 根据不同事件类型绘制附加视觉元素
+            if (event.type === 'DIVIDE') {
+                ctx.strokeStyle = '#ef4444'; // red-500
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(event.midX, 0);
+                ctx.lineTo(event.midX, h);
+                ctx.stroke();
+            }
+            
+            if (event.type === 'COMPARE' || event.type === 'STRIP_COMPARE') {
+                ctx.strokeStyle = '#f59e0b'; // amber-500
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(event.p1.x, event.p1.y);
+                ctx.lineTo(event.p2.x, event.p2.y);
+                ctx.stroke();
+
+                ctx.fillStyle = '#f59e0b';
+                ctx.beginPath(); ctx.arc(event.p1.x, event.p1.y, 6, 0, Math.PI*2); ctx.fill();
+                ctx.beginPath(); ctx.arc(event.p2.x, event.p2.y, 6, 0, Math.PI*2); ctx.fill();
+            }
+
+            if (event.type === 'BASE_RESULT' || event.type === 'MERGE_DONE') {
+                if (event.pair) {
+                    ctx.strokeStyle = '#10b981'; // emerald-500
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(event.pair[0].x, event.pair[0].y);
+                    ctx.lineTo(event.pair[1].x, event.pair[1].y);
+                    ctx.stroke();
+
+                    // 画一个圆表示距离
+                    ctx.strokeStyle = 'rgba(16, 185, 129, 0.3)';
+                    ctx.beginPath();
+                    ctx.arc(event.pair[0].x, event.pair[0].y, event.d, 0, Math.PI*2);
+                    ctx.stroke();
+                }
+            }
+
+            if (event.type === 'CONQUER_MERGE' || event.type === 'STRIP_CREATE' || event.type === 'STRIP_POINTS' || event.type === 'STRIP_COMPARE') {
+                // 画出中位线
+                ctx.strokeStyle = '#ef4444';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(event.midX, 0); ctx.lineTo(event.midX, h);
+                ctx.stroke();
+
+                // 画出候选带区域
+                const d = event.type === 'STRIP_COMPARE' ? event.limitD : event.d;
+                ctx.fillStyle = 'rgba(239, 68, 68, 0.1)'; // red-500, 10%
+                ctx.fillRect(event.midX - d, 0, d * 2, h);
+                
+                // 标记 Strip 里的点
+                if (event.strip) {
+                    ctx.fillStyle = '#8b5cf6'; // violet-500
+                    for (let p of event.strip) {
+                        ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI*2); ctx.fill();
+                    }
+                }
+            }
+
+            if (event.type === 'STRIP_UPDATE' || event.type === 'END') {
+                const pair = event.type === 'END' ? events[events.length-2].pair : [event.p1, event.p2]; // Hacky get best pair
+                if(pair) {
+                    ctx.strokeStyle = '#ec4899'; // pink-500
+                    ctx.lineWidth = 4;
+                    ctx.beginPath();
+                    ctx.moveTo(pair[0].x, pair[0].y);
+                    ctx.lineTo(pair[1].x, pair[1].y);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        // --- UI 更新与控制 ---
+        function updateUI() {
+            btnPrev.disabled = currentStep <= 0;
+            btnNext.disabled = currentStep >= events.length - 1;
+            
+            statusStep.innerText = `步骤: ${currentStep + 1} / ${events.length}`;
+
+            // 重建日志区域，高亮当前行
+            logPanel.innerHTML = '';
+            for (let i = 0; i <= currentStep; i++) {
+                const isCurrent = i === currentStep;
+                const e = events[i];
+                
+                // 更新面板上的全局最小距离
+                if (e.type === 'BASE_RESULT' || e.type === 'MERGE_DONE' || e.type === 'STRIP_UPDATE') {
+                    if (e.d < globalMinDist) globalMinDist = e.d;
+                }
+                
+                const el = document.createElement('div');
+                el.className = `p-2 rounded text-sm transition-colors ${isCurrent ? 'bg-blue-100 border-l-4 border-blue-500 font-medium text-blue-900 shadow-sm' : 'text-gray-600 border-l-4 border-transparent'}`;
+                el.innerText = `[${i+1}] ${e.desc}`;
+                logPanel.appendChild(el);
+                
+                if (isCurrent) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            }
+
+            statusDist.innerText = globalMinDist === Infinity ? '当前全局最短距离: 计算中...' : `当前已知最短距离: ${globalMinDist.toFixed(2)}`;
+
+            drawStep(currentStep);
+        }
+
+        // 按钮事件绑定
+        btnNext.addEventListener('click', () => {
+            if (currentStep < events.length - 1) {
+                currentStep++;
+                updateUI();
+            }
+        });
+
+        btnPrev.addEventListener('click', () => {
+            if (currentStep > 0) {
+                currentStep--;
+                // 重新计算 globalMinDist (从头扫到当前步骤)
+                globalMinDist = Infinity;
+                updateUI();
+            }
+        });
+
+        btnGenerate.addEventListener('click', () => {
+            if(autoPlayInterval) clearInterval(autoPlayInterval);
+            btnAuto.innerText = "自动播放";
+            generatePoints(16); // 使用 16 个点以保证足够的递归深度又不过于密集
+        });
+
+        btnAuto.addEventListener('click', () => {
+            if (autoPlayInterval) {
+                clearInterval(autoPlayInterval);
+                autoPlayInterval = null;
+                btnAuto.innerText = "自动播放";
+            } else {
+                btnAuto.innerText = "暂停播放";
+                autoPlayInterval = setInterval(() => {
+                    if (currentStep < events.length - 1) {
+                        currentStep++;
+                        updateUI();
+                    } else {
+                        clearInterval(autoPlayInterval);
+                        autoPlayInterval = null;
+                        btnAuto.innerText = "自动播放";
+                    }
+                }, 800); // 800ms 每步
+            }
+        });
+
+        // 初始化
+        setTimeout(() => {
+            resizeCanvas();
+            generatePoints(16);
+        }, 100);
+
+    </script>
+</body>
+</html>

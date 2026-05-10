@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IP 路由与 NAT 转换可视化</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        canvas {
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            image-rendering: pixelated;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen p-2 md:p-4 flex flex-col items-center text-sm">
+
+    <div class="max-w-4xl w-full bg-white rounded-xl shadow-lg overflow-hidden flex flex-col">
+        <!-- 头部标题 -->
+        <div class="bg-slate-800 text-white p-4">
+            <h1 class="text-xl font-bold">数据包 IP 地址转换全过程演示</h1>
+            <p class="text-slate-300 mt-1 text-xs">严格依据网络拓扑，展示在局域网与公网交互时，NAT 机制对 IP 数据报文的重写逻辑。</p>
+        </div>
+
+        <!-- 核心演示区 -->
+        <div class="p-4 flex flex-col items-center bg-slate-100 relative">
+            <!-- Canvas 容器 -->
+            <div class="w-full relative rounded-lg border border-slate-300 bg-white overflow-hidden shadow-inner" style="max-width: 800px;">
+                <canvas id="networkCanvas" class="w-full h-auto block" style="aspect-ratio: 8/3;"></canvas>
+            </div>
+
+            <!-- 控制面板 -->
+            <div class="mt-4 flex space-x-3">
+                <button id="nextBtn" class="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded transition-colors shadow-sm text-sm">
+                    单步演示 (下一步)
+                </button>
+                <button id="autoBtn" class="px-5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded transition-colors shadow-sm text-sm">
+                    自动完整演示
+                </button>
+                <button id="resetBtn" class="px-5 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded transition-colors shadow-sm text-sm">
+                    重置
+                </button>
+            </div>
+        </div>
+
+        <!-- 状态与逻辑链说明区 -->
+        <div class="p-4 border-t border-slate-200 grid grid-cols-1 md:grid-cols-5 gap-4">
+            <!-- 当前数据包状态 -->
+            <div class="md:col-span-2 bg-blue-50 border border-blue-100 rounded-lg p-3">
+                <h2 class="font-semibold text-blue-900 mb-2 border-b border-blue-200 pb-1">当前报文 IP 头部状态</h2>
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between text-xs">
+                        <span class="text-slate-600 font-medium">阶段：</span>
+                        <span id="statusStage" class="text-blue-700 font-bold">-</span>
+                    </div>
+                    <div class="flex items-center justify-between bg-white p-1.5 rounded shadow-sm border border-slate-200 text-xs">
+                        <span class="text-slate-500">源 IP:</span>
+                        <span id="statusSrc" class="font-mono text-green-600 font-bold tracking-tight">等待开始...</span>
+                    </div>
+                    <div class="flex items-center justify-between bg-white p-1.5 rounded shadow-sm border border-slate-200 text-xs">
+                        <span class="text-slate-500">目的 IP:</span>
+                        <span id="statusDst" class="font-mono text-rose-600 font-bold tracking-tight">等待开始...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 逻辑链说明 -->
+            <div class="md:col-span-3 bg-slate-50 border border-slate-200 rounded-lg p-3">
+                <h2 class="font-semibold text-slate-800 mb-2 border-b border-slate-200 pb-1">网络协议处理逻辑</h2>
+                <p id="logicDescription" class="text-slate-600 text-xs leading-relaxed">
+                    点击“单步演示”观察数据包流转。注意观察 IP 地址在什么设备上发生变化，什么设备上保持不变。
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('networkCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // 设置内部高分辨率画布以保持清晰度
+        const canvasWidth = 800;
+        const canvasHeight = 300;
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+
+        // UI 元素
+        const nextBtn = document.getElementById('nextBtn');
+        const autoBtn = document.getElementById('autoBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const statusStage = document.getElementById('statusStage');
+        const statusSrc = document.getElementById('statusSrc');
+        const statusDst = document.getElementById('statusDst');
+        const logicDescription = document.getElementById('logicDescription');
+
+        // 网络节点定义
+        const nodes = {
+            pc: { x: 150, y: 150, name: '局域网 PC', ip: '192.168.1.50/24' },
+            router: { x: 400, y: 150, name: '边缘路由器 (NAT)', lanIp: '192.168.1.1/24', wanIp: '203.0.113.100/29' },
+            server: { x: 650, y: 150, name: '公网服务器', ip: '198.51.100.20/32' }
+        };
+
+        // 演示阶段定义
+        const stages = [
+            {
+                id: 1, name: '一：发往网关', 
+                from: nodes.pc, to: nodes.router, 
+                srcIp: '192.168.1.50', dstIp: '198.51.100.20',
+                desc: 'PC 使用 CIDR 计算出目标 IP 不在同网段（192.168.1.0/24），因此将数据链路层 MAC 发给路由器。**此时网络层 IP 头部源和目的地址完全没有改变**。'
+            },
+            {
+                id: 2, name: '二：进入公网 (NAT)', 
+                from: nodes.router, to: nodes.server, 
+                srcIp: '203.0.113.100', dstIp: '198.51.100.20',
+                desc: '核心转换：路由器发现目的 IP 在外网，且源 IP 是私网。它执行 SNAT（源地址转换），在 NAT 表中记录后，**将源 IP 重写为其自身的公网接口 IP (203.0.113.100)**。'
+            },
+            {
+                id: 3, name: '三：服务器响应', 
+                from: nodes.server, to: nodes.router, 
+                srcIp: '198.51.100.20', dstIp: '203.0.113.100',
+                desc: '服务器收到请求并处理完成。对它而言，请求来自 203.0.113.100。因此它构建响应报文，将目的 IP 设为路由器的公网 IP。'
+            },
+            {
+                id: 4, name: '四：返回局域网 (DNAT)', 
+                from: nodes.router, to: nodes.pc, 
+                srcIp: '198.51.100.20', dstIp: '192.168.1.50',
+                desc: '核心逆转换：路由器收到公网响应，查询 NAT 转发表，匹配到原始会话。它执行 DNAT（目的地址转换），**将目的 IP 恢复为局域网 PC 的 IP (192.168.1.50)**，并下发给局域网。'
+            }
+        ];
+
+        // 动画状态
+        let currentStageIndex = 0;
+        let progress = 0;
+        let isAnimating = false;
+        let isAutoPlaying = false;
+        let animationId;
+
+        // 绘制基础静态场景
+        function drawScene() {
+            ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+            // 绘制区域背景
+            ctx.fillStyle = 'rgba(241, 245, 249, 0.5)'; // LAN 区域
+            ctx.fillRect(0, 0, 400, 300);
+            ctx.fillStyle = 'rgba(240, 249, 255, 0.5)'; // WAN 区域
+            ctx.fillRect(400, 0, 400, 300);
+
+            // 区域文字
+            ctx.font = 'bold 14px sans-serif';
+            ctx.fillStyle = '#64748b';
+            ctx.fillText('局域网 (LAN) / 私有 IP 域', 100, 30);
+            ctx.fillStyle = '#0284c7';
+            ctx.fillText('互联网 (WAN) / 公网 IP 域', 500, 30);
+
+            // 绘制连接线
+            ctx.beginPath();
+            ctx.moveTo(nodes.pc.x, nodes.pc.y);
+            ctx.lineTo(nodes.router.x, nodes.router.y);
+            ctx.lineTo(nodes.server.x, nodes.server.y);
+            ctx.strokeStyle = '#cbd5e1';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+
+            // 绘制节点
+            drawNode(nodes.pc.x, nodes.pc.y, '#3b82f6', '💻');
+            drawNode(nodes.router.x, nodes.router.y, '#8b5cf6', '🖲️');
+            drawNode(nodes.server.x, nodes.server.y, '#10b981', '🖥️');
+
+            // 绘制节点标签和 IP
+            drawLabels();
+        }
+
+        function drawNode(x, y, color, icon) {
+            ctx.beginPath();
+            ctx.arc(x, y, 25, 0, Math.PI * 2);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = color;
+            ctx.stroke();
+
+            ctx.font = '20px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(icon, x, y);
+        }
+
+        function drawLabels() {
+            ctx.textAlign = 'center';
+            
+            // PC
+            ctx.fillStyle = '#1e293b';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(nodes.pc.name, nodes.pc.x, nodes.pc.y + 40);
+            ctx.fillStyle = '#475569';
+            ctx.font = '10px monospace';
+            ctx.fillText(nodes.pc.ip, nodes.pc.x, nodes.pc.y + 55);
+
+            // Router
+            ctx.fillStyle = '#1e293b';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(nodes.router.name, nodes.router.x, nodes.router.y + 40);
+            ctx.fillStyle = '#475569';
+            ctx.font = '10px monospace';
+            ctx.fillText('LAN: ' + nodes.router.lanIp, nodes.router.x, nodes.router.y + 55);
+            ctx.fillStyle = '#0284c7';
+            ctx.fillText('WAN: ' + nodes.router.wanIp, nodes.router.x, nodes.router.y + 70);
+
+            // Server
+            ctx.fillStyle = '#1e293b';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(nodes.server.name, nodes.server.x, nodes.server.y + 40);
+            ctx.fillStyle = '#475569';
+            ctx.font = '10px monospace';
+            ctx.fillText(nodes.server.ip, nodes.server.x, nodes.server.y + 55);
+        }
+
+        // 绘制正在移动的数据包
+        function drawPacket(x, y, srcIp, dstIp) {
+            // 数据包主体 (信封形状)
+            ctx.fillStyle = '#f59e0b';
+            ctx.fillRect(x - 16, y - 12, 32, 24);
+            ctx.strokeStyle = '#b45309';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x - 16, y - 12, 32, 24);
+            
+            // 信封线条
+            ctx.beginPath();
+            ctx.moveTo(x - 16, y - 12);
+            ctx.lineTo(x, y);
+            ctx.lineTo(x + 16, y - 12);
+            ctx.stroke();
+
+            // 悬浮 IP 头部信息框
+            const boxWidth = 120;
+            const boxHeight = 36;
+            let boxX = x - boxWidth / 2;
+            let boxY = y - 55; // 悬浮在数据包上方
+
+            // 如果太靠边缘，稍微调整位置避免裁剪
+            if (boxX < 10) boxX = 10;
+            if (boxX + boxWidth > canvasWidth - 10) boxX = canvasWidth - boxWidth - 10;
+
+            // 绘制信息框背景
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.1)';
+            ctx.shadowBlur = 10;
+            ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+            ctx.shadowColor = 'transparent'; // 重置阴影
+            
+            ctx.strokeStyle = '#94a3b8';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+
+            // 绘制 IP 文本
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            
+            ctx.font = 'bold 10px sans-serif';
+            ctx.fillStyle = '#16a34a'; // Src 绿色
+            ctx.fillText('S: ' + srcIp, boxX + 4, boxY + 4);
+            
+            ctx.fillStyle = '#e11d48'; // Dst 红色
+            ctx.fillText('D: ' + dstIp, boxX + 4, boxY + 20);
+        }
+
+        function updateUI(stage) {
+            statusStage.textContent = stage.name;
+            statusSrc.textContent = stage.srcIp;
+            
+            // 添加高亮特效类
+            statusSrc.classList.remove('bg-yellow-100', 'transition-colors');
+            statusDst.classList.remove('bg-yellow-100', 'transition-colors');
+            
+            // 如果是在转换点发生改变，做个背景闪烁高亮提示
+            if (stage.id === 2) {
+                statusSrc.classList.add('bg-yellow-100', 'transition-colors', 'duration-500');
+            } else if (stage.id === 4) {
+                statusDst.classList.add('bg-yellow-100', 'transition-colors', 'duration-500');
+            }
+
+            statusDst.textContent = stage.dstIp;
+            logicDescription.innerHTML = stage.desc.replace(/\*\*(.*?)\*\*/g, '<strong class="text-slate-900">$1</strong>');
+        }
+
+        function animate() {
+            if (!isAnimating) return;
+
+            const currentStage = stages[currentStageIndex];
+            
+            // 计算当前坐标 (线性插值)
+            const currentX = currentStage.from.x + (currentStage.to.x - currentStage.from.x) * progress;
+            const currentY = currentStage.from.y + (currentStage.to.y - currentStage.from.y) * progress;
+
+            drawScene();
+            drawPacket(currentX, currentY, currentStage.srcIp, currentStage.dstIp);
+
+            progress += 0.006; // 控制动画速度
+
+            if (progress >= 1) {
+                progress = 0;
+                currentStageIndex++;
+                
+                if (currentStageIndex >= stages.length) {
+                    isAnimating = false;
+                    isAutoPlaying = false;
+                    nextBtn.textContent = '演示完毕';
+                    nextBtn.disabled = true;
+                    autoBtn.disabled = false;
+                    drawScene(); // 清除包
+                    return;
+                } else {
+                    // 进入下一阶段
+                    updateUI(stages[currentStageIndex]);
+                    
+                    if (!isAutoPlaying) {
+                        // 单步模式：停在下一个节点的起点
+                        isAnimating = false;
+                        nextBtn.disabled = false;
+                        autoBtn.disabled = false;
+                        drawScene();
+                        const nextStage = stages[currentStageIndex];
+                        drawPacket(nextStage.from.x, nextStage.from.y, nextStage.srcIp, nextStage.dstIp);
+                        return;
+                    }
+                }
+            }
+
+            animationId = requestAnimationFrame(animate);
+        }
+
+        function startStage() {
+            if (currentStageIndex >= stages.length) return;
+            isAnimating = true;
+            nextBtn.disabled = true;
+            autoBtn.disabled = true;
+            updateUI(stages[currentStageIndex]);
+            cancelAnimationFrame(animationId);
+            animate();
+        }
+
+        nextBtn.addEventListener('click', () => {
+            isAutoPlaying = false;
+            startStage();
+        });
+
+        autoBtn.addEventListener('click', () => {
+            isAutoPlaying = true;
+            startStage();
+        });
+
+        resetBtn.addEventListener('click', () => {
+            isAnimating = false;
+            isAutoPlaying = false;
+            cancelAnimationFrame(animationId);
+            currentStageIndex = 0;
+            progress = 0;
+            
+            nextBtn.textContent = '单步演示 (下一步)';
+            nextBtn.disabled = false;
+            autoBtn.disabled = false;
+            
+            statusStage.textContent = '-';
+            statusSrc.textContent = '等待开始...';
+            statusDst.textContent = '等待开始...';
+            statusSrc.className = 'font-mono text-green-600 font-bold tracking-tight';
+            statusDst.className = 'font-mono text-rose-600 font-bold tracking-tight';
+            logicDescription.textContent = '点击“单步演示”或“自动完整演示”观察数据包流转。注意观察 IP 地址在什么设备上发生变化。';
+            
+            drawScene();
+        });
+
+        // 初始绘制
+        drawScene();
+
+    </script>
+</body>
+</html>

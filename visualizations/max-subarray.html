@@ -1,0 +1,385 @@
+import React, { useState, useEffect, useCallback } from 'react';
+
+const COMPLEX_ARRAY = [-2, 1, -3, 4, -1, 2, 1, -5, 4];
+
+// --- 算法步骤生成器 ---
+// 1. Kadane 算法生成器
+function generateKadaneSteps(arr) {
+  let steps = [];
+  let maxSoFar = arr[0];
+  let currentMax = arr[0];
+  let bestStart = 0;
+  let bestEnd = 0;
+  let currentStart = 0;
+
+  steps.push({
+    title: "初始化",
+    desc: `设置初始局部最大和为 ${currentMax}，全局最大和为 ${maxSoFar}。`,
+    idx: 0, currentMax, maxSoFar, bestStart, bestEnd, currentStart, phase: 'init'
+  });
+
+  for (let i = 1; i < arr.length; i++) {
+    let prevMax = currentMax;
+    let isReset = false;
+
+    if (currentMax <= 0) {
+      currentMax = arr[i];
+      currentStart = i;
+      isReset = true;
+      steps.push({
+        title: `步骤 ${i}: 自立门户`,
+        desc: `当前元素 ${arr[i]}。因为前置局部和为 ${prevMax} (<=0)，属于“累赘”，所以抛弃前面部分，局部子段从索引 ${i} 重新开始。`,
+        idx: i, currentMax, maxSoFar, bestStart, bestEnd, currentStart, phase: 'calc', isReset
+      });
+    } else {
+      currentMax += arr[i];
+      steps.push({
+        title: `步骤 ${i}: 延续子段`,
+        desc: `当前元素 ${arr[i]}。因为前置局部和为 ${prevMax} (>0)，具有“增益”，所以将当前元素拼接到前面的子段中。局部和更新为 ${currentMax}。`,
+        idx: i, currentMax, maxSoFar, bestStart, bestEnd, currentStart, phase: 'calc', isReset
+      });
+    }
+
+    if (currentMax > maxSoFar) {
+      maxSoFar = currentMax;
+      bestStart = currentStart;
+      bestEnd = i;
+      steps.push({
+        title: `步骤 ${i}: 更新全局最优`,
+        desc: `发现新的全局最大和！${currentMax} > 之前的全局最大和。记录当前最优子段区间 [${bestStart}, ${bestEnd}]。`,
+        idx: i, currentMax, maxSoFar, bestStart, bestEnd, currentStart, phase: 'update'
+      });
+    }
+  }
+  steps.push({
+    title: "算法完成",
+    desc: `遍历结束。最大子段和为 ${maxSoFar}，子段区间为 [${bestStart}, ${bestEnd}]。`,
+    idx: arr.length - 1, currentMax, maxSoFar, bestStart, bestEnd, currentStart, phase: 'done', isDone: true
+  });
+  return steps;
+}
+
+// 2. 分治算法生成器
+function generateDACSteps(arr) {
+  let steps = [];
+
+  function solve(l, r, depth) {
+    steps.push({
+      title: `分解阶段 (深度 ${depth})`,
+      desc: `分析区间 [${l}, ${r}] 的最大子段和。`,
+      l, r, depth, phase: 'divide'
+    });
+
+    if (l === r) {
+      steps.push({
+        title: `触底 (深度 ${depth})`,
+        desc: `区间 [${l}, ${r}] 只有一个元素。它的最大子段和就是自身：${arr[l]}。`,
+        l, r, depth, phase: 'base', val: arr[l]
+      });
+      return arr[l];
+    }
+
+    let mid = Math.floor((l + r) / 2);
+    let leftMax = solve(l, mid, depth + 1);
+    let rightMax = solve(mid + 1, r, depth + 1);
+
+    steps.push({
+      title: `计算跨区和 (深度 ${depth})`,
+      desc: `计算跨越中点 (索引 ${mid}) 的最大连续和，区间 [${l}, ${r}]。`,
+      l, r, mid, depth, phase: 'cross_calc'
+    });
+
+    let leftSum = -Infinity;
+    let currentLeftSum = 0;
+    let crossLeftBest = mid;
+    for (let i = mid; i >= l; i--) {
+      currentLeftSum += arr[i];
+      if (currentLeftSum > leftSum) {
+        leftSum = currentLeftSum;
+        crossLeftBest = i;
+      }
+    }
+
+    let rightSum = -Infinity;
+    let currentRightSum = 0;
+    let crossRightBest = mid + 1;
+    for (let i = mid + 1; i <= r; i++) {
+      currentRightSum += arr[i];
+      if (currentRightSum > rightSum) {
+        rightSum = currentRightSum;
+        crossRightBest = i;
+      }
+    }
+
+    let crossMax = leftSum + rightSum;
+
+    steps.push({
+      title: `合并结果 (深度 ${depth})`,
+      desc: `左半最大: ${leftMax} | 右半最大: ${rightMax} | 跨区最大: ${crossMax} (区间[${crossLeftBest}, ${crossRightBest}])。`,
+      l, r, mid, depth, phase: 'cross_done', leftMax, rightMax, crossMax,
+      crossLeftBest, crossRightBest
+    });
+
+    let bestMax = Math.max(leftMax, rightMax, crossMax);
+
+    steps.push({
+      title: `完成区间 [${l}, ${r}]`,
+      desc: `三者取最大值，当前区间 [${l}, ${r}] 的最大子段和为 ${bestMax}。`,
+      l, r, depth, phase: 'combine_done', bestMax
+    });
+
+    return bestMax;
+  }
+
+  solve(0, arr.length - 1, 0);
+  steps.push({
+    title: "分治完成",
+    desc: "递归回溯到顶层，得到全局最大子段和。",
+    l: 0, r: arr.length - 1, phase: 'done', isDone: true
+  });
+
+  return steps;
+}
+
+// --- 主组件 ---
+export default function MaximumSubarrayVisualizer() {
+  const [algo, setAlgo] = useState('kadane');
+  const [steps, setSteps] = useState([]);
+  const [currentStepIdx, setCurrentStepIdx] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const arr = COMPLEX_ARRAY;
+
+  // 初始化步骤
+  useEffect(() => {
+    if (algo === 'kadane') {
+      setSteps(generateKadaneSteps(arr));
+    } else {
+      setSteps(generateDACSteps(arr));
+    }
+    setCurrentStepIdx(0);
+    setIsPlaying(false);
+  }, [algo, arr]);
+
+  // 播放控制
+  useEffect(() => {
+    let timer;
+    if (isPlaying && currentStepIdx < steps.length - 1) {
+      timer = setTimeout(() => {
+        setCurrentStepIdx(prev => prev + 1);
+      }, 1500); // 1.5秒一步
+    } else if (currentStepIdx >= steps.length - 1) {
+      setIsPlaying(false);
+    }
+    return () => clearTimeout(timer);
+  }, [isPlaying, currentStepIdx, steps.length]);
+
+  const step = steps[currentStepIdx] || {};
+
+  const handleNext = () => setCurrentStepIdx(p => Math.min(steps.length - 1, p + 1));
+  const handlePrev = () => setCurrentStepIdx(p => Math.max(0, p - 1));
+  const handleReset = () => { setCurrentStepIdx(0); setIsPlaying(false); };
+
+  // 渲染 Kadane 视图
+  const renderKadaneView = () => {
+    return (
+      <div className="space-y-6">
+        {/* 变量状态面板 */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+            <div className="text-sm text-slate-400 mb-1">局部最大和 (Current Local Sum)</div>
+            <div className="text-3xl font-mono text-blue-400">
+              {step.currentMax !== undefined ? step.currentMax : '-'}
+            </div>
+          </div>
+          <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+            <div className="text-sm text-slate-400 mb-1">全局最大和 (Global Max So Far)</div>
+            <div className="text-3xl font-mono text-emerald-400">
+              {step.maxSoFar !== undefined ? step.maxSoFar : '-'}
+            </div>
+          </div>
+        </div>
+
+        {/* 数组可视化 */}
+        <div className="flex flex-wrap gap-2 justify-center items-center py-8">
+          {arr.map((val, i) => {
+            let isCurrent = step.idx === i;
+            let isLocalSubarray = i >= step.currentStart && i <= step.idx;
+            let isBestSubarray = i >= step.bestStart && i <= step.bestEnd;
+
+            let baseClasses = "w-14 h-14 flex items-center justify-center text-xl font-bold rounded-md transition-all duration-300 relative border-2 ";
+            
+            if (isCurrent) {
+              baseClasses += "border-yellow-400 bg-yellow-400/20 text-yellow-100 transform scale-110 ";
+            } else if (isBestSubarray) {
+              baseClasses += "border-emerald-500 bg-emerald-500/20 text-emerald-100 ";
+            } else if (isLocalSubarray) {
+              baseClasses += "border-blue-500 bg-blue-500/20 text-blue-100 ";
+            } else {
+              baseClasses += "border-slate-700 bg-slate-800 text-slate-500 ";
+            }
+
+            return (
+              <div key={i} className="flex flex-col items-center">
+                <div className={baseClasses}>
+                  {val}
+                  {isCurrent && (
+                    <div className="absolute -top-6 text-xs text-yellow-400">当前i</div>
+                  )}
+                </div>
+                <div className="text-xs text-slate-500 mt-2">[{i}]</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  // 渲染分治视图
+  const renderDACView = () => {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-3 gap-4">
+          <div className="bg-slate-800 p-3 rounded-lg border border-slate-700">
+            <div className="text-xs text-slate-400">当前区间 [L, R]</div>
+            <div className="text-lg font-mono text-white">
+              {step.l !== undefined ? `[${step.l}, ${step.r}]` : '-'}
+            </div>
+          </div>
+          <div className="bg-slate-800 p-3 rounded-lg border border-slate-700">
+            <div className="text-xs text-slate-400">区间中点 Mid</div>
+            <div className="text-lg font-mono text-purple-400">
+              {step.mid !== undefined ? step.mid : '-'}
+            </div>
+          </div>
+          <div className="bg-slate-800 p-3 rounded-lg border border-slate-700">
+            <div className="text-xs text-slate-400">当前区间最大值</div>
+            <div className="text-lg font-mono text-emerald-400">
+              {step.bestMax !== undefined ? step.bestMax : (step.val !== undefined ? step.val : '-')}
+            </div>
+          </div>
+        </div>
+
+        {step.phase === 'cross_done' && (
+           <div className="bg-blue-900/30 border border-blue-800 p-3 rounded text-sm text-blue-200 text-center font-mono">
+              左最大={step.leftMax} | 右最大={step.rightMax} | 跨越最大={step.crossMax}
+           </div>
+        )}
+
+        <div className="flex flex-wrap gap-2 justify-center items-center py-8">
+          {arr.map((val, i) => {
+            let isInRange = i >= step.l && i <= step.r;
+            let isMid = i === step.mid;
+            let isCrossTarget = step.phase === 'cross_done' && i >= step.crossLeftBest && i <= step.crossRightBest;
+
+            let baseClasses = "w-12 h-12 flex items-center justify-center text-lg font-bold rounded-md transition-all duration-300 relative border-2 ";
+            
+            if (isCrossTarget) {
+               baseClasses += "border-pink-500 bg-pink-500/20 text-pink-100 transform scale-110 ";
+            } else if (isMid) {
+               baseClasses += "border-purple-500 bg-purple-500/30 text-purple-100 ";
+            } else if (isInRange) {
+               baseClasses += "border-blue-500 bg-blue-500/20 text-blue-100 ";
+            } else {
+               baseClasses += "border-slate-800 bg-slate-900 text-slate-700 opacity-50 ";
+            }
+
+            return (
+              <div key={i} className="flex flex-col items-center">
+                <div className={baseClasses}>
+                  {val}
+                  {isMid && <div className="absolute -top-5 text-[10px] text-purple-400">Mid</div>}
+                </div>
+                <div className="text-xs text-slate-500 mt-1">[{i}]</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200 p-6 font-sans">
+      <div className="max-w-4xl mx-auto space-y-6">
+        
+        {/* Header */}
+        <div className="flex justify-between items-end border-b border-slate-800 pb-4">
+          <div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">最大子段和 (Max Subarray) 可视化</h1>
+            <p className="text-sm text-slate-400 mt-1">演示数组: [-2, 1, -3, 4, -1, 2, 1, -5, 4]</p>
+          </div>
+          
+          <div className="flex space-x-2 bg-slate-900 p-1 rounded-lg border border-slate-800">
+            <button 
+              onClick={() => setAlgo('kadane')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${algo === 'kadane' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+            >
+              Kadane (动态规划)
+            </button>
+            <button 
+              onClick={() => setAlgo('dac')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${algo === 'dac' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+            >
+              Divide & Conquer (分治)
+            </button>
+          </div>
+        </div>
+
+        {/* Info Panel */}
+        <div className="bg-slate-900 border border-slate-700 rounded-xl p-5 shadow-lg min-h-[120px]">
+          <div className="flex items-center space-x-2 mb-2">
+            <span className="bg-slate-700 text-xs px-2 py-1 rounded font-mono text-slate-300">
+              步骤 {currentStepIdx + 1} / {steps.length}
+            </span>
+            <h3 className="text-lg font-semibold text-blue-300">{step.title}</h3>
+          </div>
+          <p className="text-slate-300 leading-relaxed text-sm">
+            {step.desc}
+          </p>
+        </div>
+
+        {/* Visualization Canvas area */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-inner overflow-hidden min-h-[300px]">
+          {algo === 'kadane' ? renderKadaneView() : renderDACView()}
+        </div>
+
+        {/* Controls */}
+        <div className="flex justify-center items-center space-x-4 bg-slate-900 p-4 rounded-xl border border-slate-800">
+          <button 
+            onClick={handleReset}
+            className="p-3 bg-slate-800 hover:bg-slate-700 rounded-full text-slate-300 transition-colors"
+            title="重置"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+          </button>
+          <button 
+            onClick={handlePrev}
+            disabled={currentStepIdx === 0}
+            className="p-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:hover:bg-slate-800 rounded-full text-slate-300 transition-colors"
+          >
+             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+          </button>
+          <button 
+            onClick={() => setIsPlaying(!isPlaying)}
+            className="px-8 py-3 bg-blue-600 hover:bg-blue-500 rounded-full text-white font-bold flex items-center space-x-2 transition-colors shadow-lg shadow-blue-900/50"
+          >
+            {isPlaying ? (
+              <><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg> <span>暂停</span></>
+            ) : (
+              <><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1"><polygon points="5 3 19 12 5 21 5 3"/></svg> <span>播放</span></>
+            )}
+          </button>
+          <button 
+            onClick={handleNext}
+            disabled={currentStepIdx === steps.length - 1}
+            className="p-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:hover:bg-slate-800 rounded-full text-slate-300 transition-colors"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>最优二叉搜索树 (OBST) 动态规划可视化</title>
+    <!-- 使用 Tailwind CSS 进行固定且美观的布局 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React 依赖 -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel 用于解析浏览器中的 JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f3f4f6; }
+        .grid-table { display: grid; grid-template-columns: 40px repeat(5, 50px); gap: 2px; }
+        .cell { display: flex; align-items: center; justify-content: center; height: 36px; background-color: white; border: 1px solid #e5e7eb; font-size: 0.85rem; transition: all 0.2s; }
+        .cell-header { background-color: #f3f4f6; font-weight: bold; border: none; }
+        .cell-empty { background-color: transparent; border: none; }
+        
+        .highlight-write { border: 2px solid #ef4444; background-color: #fee2e2; font-weight: bold; box-shadow: 0 0 8px rgba(239,68,68,0.5); z-index: 10; transform: scale(1.05); }
+        .highlight-read { border: 2px solid #3b82f6; background-color: #dbeafe; }
+        .highlight-w { background-color: #fef08a; border-color: #eab308; }
+        .highlight-e { background-color: #bbf7d0; border-color: #22c55e; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // 基础数据定义 (n = 4)
+        const N = 4;
+        const P = [0, 0.15, 0.10, 0.05, 0.20]; // k1, k2, k3, k4
+        const Q = [0.05, 0.10, 0.05, 0.05, 0.25]; // d0, d1, d2, d3, d4
+
+        // 浮点数加法修正，保留两位小数
+        const add = (...args) => Number(args.reduce((sum, val) => sum + val, 0).toFixed(2));
+
+        // 预生成所有动态规划的步骤数据
+        const generateSteps = () => {
+            const steps = [];
+            const e = Array(N + 2).fill(0).map(() => Array(N + 1).fill(null));
+            const w = Array(N + 2).fill(0).map(() => Array(N + 1).fill(null));
+            const root = Array(N + 1).fill(0).map(() => Array(N + 1).fill(null));
+
+            // 初始化记录
+            steps.push({
+                type: 'INIT',
+                desc: '步骤 1: 初始化基础情况。当没有真实键 (j = i-1) 时，期望成本 e 和权重 w 直接等于虚拟键 d 的概率 q。',
+                state: { e: JSON.parse(JSON.stringify(e)), w: JSON.parse(JSON.stringify(w)), root: JSON.parse(JSON.stringify(root)) }
+            });
+
+            for (let i = 1; i <= N + 1; i++) {
+                e[i][i - 1] = Q[i - 1];
+                w[i][i - 1] = Q[i - 1];
+            }
+
+            steps.push({
+                type: 'INIT_DONE',
+                desc: '基础对角线数据初始化完成。接下来我们将按照子树长度 l (从 1 到 4) 依次计算。',
+                state: { e: JSON.parse(JSON.stringify(e)), w: JSON.parse(JSON.stringify(w)), root: JSON.parse(JSON.stringify(root)) },
+                activeCells: []
+            });
+
+            // 动态规划计算
+            for (let l = 1; l <= N; l++) {
+                for (let i = 1; i <= N - l + 1; i++) {
+                    let j = i + l - 1;
+
+                    // 计算 W
+                    w[i][j] = add(w[i][j - 1], P[j], Q[j]);
+                    steps.push({
+                        type: 'CALC_W',
+                        i, j, l,
+                        desc: `正在计算长度为 ${l} 的区间 [k${i}..k${j}] 的权重 w[${i},${j}] = w[${i},${j-1}] + p${j} + q${j} = ${w[i][j-1]} + ${P[j]} + ${Q[j]} = ${w[i][j]}`,
+                        state: { e: JSON.parse(JSON.stringify(e)), w: JSON.parse(JSON.stringify(w)), root: JSON.parse(JSON.stringify(root)) },
+                        readCells: [{table: 'W', r: i, c: j-1}],
+                        writeCell: {table: 'W', r: i, c: j}
+                    });
+
+                    // 寻找最优 Root
+                    e[i][j] = Infinity;
+                    let bestR = -1;
+
+                    steps.push({
+                        type: 'START_ROOT_SEARCH',
+                        i, j, l,
+                        desc: `准备计算区间 [k${i}..k${j}] 的最小成本 e[${i},${j}]。需要遍历该区间内所有可能的根节点 r (${i} ≤ r ≤ ${j})。`,
+                        state: { e: JSON.parse(JSON.stringify(e)), w: JSON.parse(JSON.stringify(w)), root: JSON.parse(JSON.stringify(root)) },
+                        writeCell: {table: 'E', r: i, c: j}
+                    });
+
+                    for (let r = i; r <= j; r++) {
+                        let currentCost = add(e[i][r - 1], e[r + 1][j], w[i][j]);
+                        
+                        steps.push({
+                            type: 'TEST_ROOT',
+                            i, j, r, currentCost, bestCost: e[i][j] === Infinity ? '∞' : e[i][j],
+                            desc: `假设选择 k${r} 作为根节点：\n左子树成本 e[${i},${r-1}] = ${e[i][r-1]}\n右子树成本 e[${r+1},${j}] = ${e[r+1][j]}\n增加的深度成本 w[${i},${j}] = ${w[i][j]}\n当前组合总成本 = ${currentCost}`,
+                            state: { e: JSON.parse(JSON.stringify(e)), w: JSON.parse(JSON.stringify(w)), root: JSON.parse(JSON.stringify(root)) },
+                            readCells: [{table: 'E', r: i, c: r-1}, {table: 'E', r: r+1, c: j}, {table: 'W', r: i, c: j}],
+                            testingRoot: r
+                        });
+
+                        if (currentCost < e[i][j]) {
+                            e[i][j] = currentCost;
+                            bestR = r;
+                            steps.push({
+                                type: 'NEW_MIN',
+                                i, j, r, currentCost,
+                                desc: `发现更小的总成本 ${currentCost} (优于之前的记录)！暂时记录 k${r} 为当前区间 [k${i}..k${j}] 的最优根节点。`,
+                                state: { e: JSON.parse(JSON.stringify(e)), w: JSON.parse(JSON.stringify(w)), root: JSON.parse(JSON.stringify(root)) },
+                                writeCell: {table: 'E', r: i, c: j},
+                                testingRoot: r
+                            });
+                        }
+                    }
+
+                    root[i][j] = bestR;
+                    steps.push({
+                        type: 'SAVE_RESULT',
+                        i, j, bestR, finalCost: e[i][j],
+                        desc: `区间 [k${i}..k${j}] 遍历完毕。最优根节点为 k${bestR}，最小期望搜索成本 e[${i},${j}] 确认为 ${e[i][j]}。`,
+                        state: { e: JSON.parse(JSON.stringify(e)), w: JSON.parse(JSON.stringify(w)), root: JSON.parse(JSON.stringify(root)) },
+                        writeCell: {table: 'R', r: i, c: j}
+                    });
+                }
+            }
+
+            steps.push({
+                type: 'DONE',
+                desc: `算法执行完毕！整个树 [k1..k4] 的最小期望搜索成本为 e[1,4] = ${e[1][4]}。`,
+                state: { e, w, root },
+                writeCell: {table: 'E', r: 1, c: N}
+            });
+
+            return steps;
+        };
+
+        const steps = generateSteps();
+
+        // React 主组件
+        const App = () => {
+            const [stepIdx, setStepIdx] = useState(0);
+            const currentStep = steps[stepIdx];
+
+            // 格式化单元格内容
+            const formatCell = (val) => val === null ? '' : val.toFixed ? val.toFixed(2) : val;
+
+            const isWriteCell = (table, r, c) => currentStep.writeCell && currentStep.writeCell.table === table && currentStep.writeCell.r === r && currentStep.writeCell.c === c;
+            const isReadCell = (table, r, c) => currentStep.readCells && currentStep.readCells.some(cell => cell.table === table && cell.r === r && cell.c === c);
+
+            const getCellClass = (table, r, c, val) => {
+                let cls = 'cell ';
+                if (val === null && r <= N+1 && c >= 0 && c < r-1) return 'cell cell-empty';
+                if (isWriteCell(table, r, c)) cls += 'highlight-write ';
+                else if (isReadCell(table, r, c)) cls += 'highlight-read ';
+                return cls;
+            };
+
+            // 渲染表格辅助函数
+            const renderTable = (title, tableData, tableName, maxValueC) => (
+                <div className="flex flex-col mb-4">
+                    <h3 className="font-bold text-gray-700 mb-2 text-center">{title}</h3>
+                    <div className="grid-table bg-white p-2 rounded shadow-sm border border-gray-200">
+                        <div className="cell cell-header cell-empty"></div>
+                        {[0, 1, 2, 3, 4].map(c => <div key={`hc${c}`} className="cell cell-header">j={c}</div>)}
+                        
+                        {[1, 2, 3, 4, 5].map(r => (
+                            <React.Fragment key={`r${r}`}>
+                                <div className="cell cell-header">i={r}</div>
+                                {[0, 1, 2, 3, 4].map(c => (
+                                    <div key={`c${c}`} className={getCellClass(tableName, r, c, tableData[r] ? tableData[r][c] : null)}>
+                                        {(tableData[r] && tableData[r][c] !== null) ? formatCell(tableData[r][c]) : ''}
+                                    </div>
+                                ))}
+                            </React.Fragment>
+                        ))}
+                    </div>
+                </div>
+            );
+
+            // 构建树结构的辅助函数，用于 SVG 渲染
+            const buildTree = (i, j, currentRoot) => {
+                if (j < i) {
+                    return { type: 'dummy', id: j, x: 0, y: 0 };
+                }
+                
+                // 如果是在探索阶段，并且正在寻找这个范围的root
+                let r = currentStep.state.root[i][j];
+                let isHypothetical = false;
+                
+                if (currentStep.type === 'TEST_ROOT' || currentStep.type === 'NEW_MIN') {
+                    if (currentStep.i === i && currentStep.j === j) {
+                        r = currentStep.testingRoot;
+                        isHypothetical = true;
+                    }
+                }
+
+                if (r === null) return null; // 尚未计算出根节点
+
+                return {
+                    type: 'internal', id: r,
+                    isHypothetical,
+                    left: buildTree(i, r - 1, currentRoot),
+                    right: buildTree(r + 1, j, currentRoot)
+                };
+            };
+
+            // 计算节点坐标
+            const assignCoordinates = (node, depth, minX, maxX) => {
+                if (!node) return;
+                node.y = depth * 60 + 30;
+                
+                if (node.type === 'internal') {
+                    // 内部节点根据其 ID (1-4) 分配绝对 X 坐标，保持水平位置不变！
+                    // X = id * 80
+                    node.x = node.id * 80;
+                    assignCoordinates(node.left, depth + 1, minX, node.id - 1);
+                    assignCoordinates(node.right, depth + 1, node.id + 1, maxX);
+                } else {
+                    // 虚拟节点根据 ID (0-4) 分配坐标，介于真实节点之间
+                    // d0 = 40, d1 = 120, d2 = 200, d3 = 280, d4 = 360
+                    node.x = node.id * 80 + 40;
+                }
+            };
+
+            let currentTree = null;
+            // 找出当前演示范围的树
+            let rootI = 1, rootJ = N;
+            if (currentStep.type === 'TEST_ROOT' || currentStep.type === 'NEW_MIN' || currentStep.type === 'START_ROOT_SEARCH') {
+                rootI = currentStep.i;
+                rootJ = currentStep.j;
+            } else if (currentStep.type === 'SAVE_RESULT' || currentStep.type === 'CALC_W') {
+                 rootI = currentStep.i;
+                 rootJ = currentStep.j;
+            }
+
+            if (stepIdx > 0 && currentStep.state.root[rootI]) {
+                currentTree = buildTree(rootI, rootJ, null);
+                if (currentTree) {
+                    assignCoordinates(currentTree, 0, 0, 5);
+                }
+            }
+
+            // 渲染 SVG 树节点
+            const renderSVGTree = (node) => {
+                if (!node) return null;
+                const elements = [];
+                
+                if (node.left) {
+                    elements.push(
+                        <line key={`l-${node.type}-${node.id}`} x1={node.x} y1={node.y} x2={node.left.x} y2={node.left.y} 
+                              stroke={node.isHypothetical ? "#ef4444" : "#9ca3af"} strokeWidth="2" strokeDasharray={node.isHypothetical ? "4 4" : "none"} />
+                    );
+                    elements.push(...renderSVGTree(node.left));
+                }
+                
+                if (node.right) {
+                    elements.push(
+                        <line key={`r-${node.type}-${node.id}`} x1={node.x} y1={node.y} x2={node.right.x} y2={node.right.y} 
+                              stroke={node.isHypothetical ? "#ef4444" : "#9ca3af"} strokeWidth="2" strokeDasharray={node.isHypothetical ? "4 4" : "none"} />
+                    );
+                    elements.push(...renderSVGTree(node.right));
+                }
+
+                if (node.type === 'internal') {
+                    elements.push(
+                        <circle key={`nc-${node.id}`} cx={node.x} cy={node.y} r="20" fill={node.isHypothetical ? "#fef2f2" : "#fff"} stroke={node.isHypothetical ? "#ef4444" : "#3b82f6"} strokeWidth="3" />
+                    );
+                    elements.push(
+                        <text key={`nt-${node.id}`} x={node.x} y={node.y} textAnchor="middle" dy=".3em" fontSize="14" fontWeight="bold" fill="#1f2937">k{node.id}</text>
+                    );
+                } else {
+                    elements.push(
+                        <rect key={`dc-${node.id}`} x={node.x - 15} y={node.y - 15} width="30" height="30" fill="#f3f4f6" stroke="#9ca3af" strokeWidth="2" rx="4" />
+                    );
+                    elements.push(
+                        <text key={`dt-${node.id}`} x={node.x} y={node.y} textAnchor="middle" dy=".3em" fontSize="12" fill="#4b5563">d{node.id}</text>
+                    );
+                }
+
+                return elements;
+            };
+
+            return (
+                <div className="h-screen flex flex-col p-4 gap-4 box-border max-h-screen overflow-hidden">
+                    {/* 头部与控制面板 - 固定高度 */}
+                    <div className="flex-none bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex justify-between items-center h-24">
+                        <div>
+                            <h1 className="text-xl font-bold text-gray-800">最优二叉搜索树 (OBST) 可视化</h1>
+                            <div className="text-sm text-gray-500 mt-1">当前进度: {stepIdx + 1} / {steps.length}</div>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={() => setStepIdx(0)} disabled={stepIdx === 0} className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50">重置</button>
+                            <button onClick={() => setStepIdx(s => Math.max(0, s - 1))} disabled={stepIdx === 0} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50">⬅ 上一步</button>
+                            <button onClick={() => setStepIdx(s => Math.min(steps.length - 1, s + 1))} disabled={stepIdx === steps.length - 1} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50">下一步 ➡</button>
+                        </div>
+                    </div>
+
+                    {/* 主内容区域 - 三列布局 */}
+                    <div className="flex-1 flex gap-4 min-h-0">
+                        {/* 左侧：输入与说明 (固定宽度) */}
+                        <div className="w-1/4 flex flex-col gap-4 overflow-y-auto pr-2">
+                            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex-none">
+                                <h3 className="font-bold text-gray-700 mb-2 border-b pb-1">输入概率分布</h3>
+                                <table className="w-full text-sm text-left mb-2">
+                                    <thead><tr className="bg-gray-50"><th className="p-1">键</th><th className="p-1">概率 (P)</th></tr></thead>
+                                    <tbody>
+                                        {P.map((p, i) => i > 0 ? <tr key={`p${i}`}><td className="p-1 border-t">k{i}</td><td className="p-1 border-t">{p.toFixed(2)}</td></tr> : null)}
+                                    </tbody>
+                                </table>
+                                <table className="w-full text-sm text-left">
+                                    <thead><tr className="bg-gray-50"><th className="p-1">虚拟键</th><th className="p-1">概率 (Q)</th></tr></thead>
+                                    <tbody>
+                                        {Q.map((q, i) => <tr key={`q${i}`}><td className="p-1 border-t">d{i}</td><td className="p-1 border-t">{q.toFixed(2)}</td></tr>)}
+                                    </tbody>
+                                </table>
+                            </div>
+                            
+                            <div className="bg-white p-4 rounded-lg shadow-sm border-l-4 border-blue-500 flex-1 overflow-y-auto">
+                                <h3 className="font-bold text-blue-700 mb-2">当前操作说明</h3>
+                                <p className="text-gray-700 whitespace-pre-wrap leading-relaxed">{currentStep.desc}</p>
+                            </div>
+                        </div>
+
+                        {/* 中间：DP 表格 (可滚动) */}
+                        <div className="w-2/4 bg-white p-4 rounded-lg shadow-sm border border-gray-200 overflow-y-auto flex flex-col items-center">
+                            {renderTable('1. 权重表 W[i, j]', currentStep.state.w, 'W')}
+                            {renderTable('2. 期望成本表 E[i, j]', currentStep.state.e, 'E')}
+                            {renderTable('3. 根节点记录表 Root[i, j]', currentStep.state.root, 'R')}
+                        </div>
+
+                        {/* 右侧：子树结构可视化 */}
+                        <div className="w-1/4 bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col relative overflow-hidden">
+                            <h3 className="font-bold text-gray-700 mb-2 border-b pb-1 flex-none">当前子区间局部树结构</h3>
+                            {currentStep.type !== 'INIT' && currentStep.type !== 'INIT_DONE' ? (
+                                <p className="text-sm text-gray-500 flex-none text-center mb-2">
+                                    展示区间 [k{currentStep.i} .. k{currentStep.j}] 的树状形态
+                                </p>
+                            ) : (
+                                <p className="text-sm text-gray-500 flex-none text-center mb-2">等待数据初始化...</p>
+                            )}
+                            <div className="flex-1 bg-gray-50 border border-dashed border-gray-300 rounded relative overflow-hidden">
+                                {currentTree && (
+                                    <svg width="100%" height="100%" viewBox="0 0 400 350" preserveAspectRatio="xMidYMin meet">
+                                        {renderSVGTree(currentTree)}
+                                    </svg>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

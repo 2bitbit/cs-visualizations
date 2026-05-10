@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>单纯形法双空间映射揭秘</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; background-color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; }
+        .fixed-layout-wrapper { min-height: 950px; max-width: 1400px; margin: 0 auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+        .canvas-box { flex: 1; min-height: 350px; position: relative; }
+        .explanation-box { min-height: 120px; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // 问题设定 (原问题)：
+        // Max Z = 3x1 + 5x2
+        // 约束: x1 + s1 = 4; 2x2 + s2 = 12; 3x1 + 2x2 + s3 = 18
+        // 列向量 (三维)：P1(1,0,3), P2(0,2,2), P3(1,0,0), P4(0,1,0), P5(0,0,1)
+
+        const STEPS = [
+            {
+                step: 0,
+                leftTitle: "初始状态 (0,0)",
+                rightTitle: "初始单纯形：P3-P4-P5 三角形",
+                leftPoint: {x: 0, y: 0},
+                rightBasis: [3, 4, 5],
+                pivotRow: 2, 
+                pivotCol: 2, 
+                tableau: [
+                    ["基变量", "x1", "x2", "s1", "s2", "s3", "常数项"],
+                    ["s1", "1", "0", "1", "0", "0", "4"],
+                    ["s2", "0", "2", "0", "1", "0", "12"],
+                    ["s3", "3", "2", "0", "0", "1", "18"],
+                    ["Z", "-3", "-5", "0", "0", "0", "0"]
+                ],
+                leftDesc: "从原点 (0,0) 开始。发现 x2 利润提升最高，决定沿 Y 轴拉高 x2。",
+                rightDesc: "【三维翻转揭秘】：此时我们选中的基变量是 3个松弛变量。它们对应的列向量 P3, P4, P5 在三维空间里构成了一个红色的三角形（数学上称为 2维单纯形）。"
+            },
+            {
+                step: 1,
+                leftTitle: "第一次迭代：爬升到 (0,6)",
+                rightTitle: "单纯形跳跃：以 P3-P5 为轴翻转",
+                leftPoint: {x: 0, y: 6},
+                rightBasis: [3, 2, 5],
+                pivotRow: 3, 
+                pivotCol: 1, 
+                tableau: [
+                    ["基变量", "x1", "x2", "s1", "s2", "s3", "常数项"],
+                    ["s1", "1", "0", "1", "0", "0", "4"],
+                    ["x2", "0", "1", "0", "0.5", "0", "6"],
+                    ["s3", "3", "0", "0", "-1", "1", "6"],
+                    ["Z", "-3", "0", "0", "2.5", "0", "30"]
+                ],
+                leftDesc: "拉高 x2 直到撞上约束 (0,6)。此时 x2 进基，s2 出基。重新评估发现还能拉高 x1。",
+                rightDesc: "【三维翻转揭秘】：代数上的“x2进基，s2出基”，在几何上表现为：丢掉 P4 顶点，引入 P2 顶点。红色的三角形就像一扇门，以 P3-P5 这条边为门轴，直接在三维空间中“翻转”到了 P2！"
+            },
+            {
+                step: 2,
+                leftTitle: "第二次迭代：到达全局最优",
+                rightTitle: "单纯形再次跳跃：以 P2-P3 为轴翻转",
+                leftPoint: {x: 2, y: 6},
+                rightBasis: [3, 2, 1],
+                pivotRow: null,
+                pivotCol: null,
+                tableau: [
+                    ["基变量", "x1", "x2", "s1", "s2", "s3", "常数项"],
+                    ["s1", "0", "0", "1", "1/3", "-1/3", "2"],
+                    ["x2", "0", "1", "0", "0.5", "0", "6"],
+                    ["x1", "1", "0", "0", "-1/3", "1/3", "2"],
+                    ["Z", "0", "0", "0", "1.5", "1", "36"]
+                ],
+                leftDesc: "沿着边界走向新顶点 (2,6)。x1 进基，s3 出基。下方Z行已无负数，利润无法再提升，已达全局最优。",
+                rightDesc: "【三维翻转揭秘】：丢掉 P5 顶点，引入 P1 顶点。三角形以 P2-P3 为门轴再次翻转。这个在列空间中不断翻转三角形（单纯形）去逼近目标向量的过程，正是“单纯形法”命名的终极由来！"
+            }
+        ];
+
+        const LeftCanvas = ({ stepData }) => {
+            const canvasRef = useRef(null);
+
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                const w = canvas.width;
+                const h = canvas.height;
+                ctx.clearRect(0, 0, w, h);
+
+                // Scale setting
+                const padding = 40;
+                const scaleX = (w - padding * 2) / 6;
+                const scaleY = (h - padding * 2) / 10;
+                const cx = (x) => padding + x * scaleX;
+                const cy = (y) => h - padding - y * scaleY;
+
+                // Grid lines
+                ctx.strokeStyle = "#f1f5f9"; ctx.lineWidth = 1;
+                for (let i = 0; i <= 6; i++) { ctx.beginPath(); ctx.moveTo(cx(i), cy(0)); ctx.lineTo(cx(i), cy(10)); ctx.stroke(); }
+                for (let i = 0; i <= 10; i+=2) { ctx.beginPath(); ctx.moveTo(cx(0), cy(i)); ctx.lineTo(cx(6), cy(i)); ctx.stroke(); }
+
+                // Polygon: (0,0)-(4,0)-(4,3)-(2,6)-(0,6)
+                ctx.fillStyle = "rgba(167, 243, 208, 0.4)";
+                ctx.beginPath();
+                ctx.moveTo(cx(0), cy(0)); ctx.lineTo(cx(4), cy(0)); ctx.lineTo(cx(4), cy(3));
+                ctx.lineTo(cx(2), cy(6)); ctx.lineTo(cx(0), cy(6)); ctx.closePath(); ctx.fill();
+
+                // Constraint boundaries
+                ctx.lineWidth = 2;
+                // x1 = 4
+                ctx.strokeStyle = "#ef4444"; ctx.beginPath(); ctx.moveTo(cx(4), cy(0)); ctx.lineTo(cx(4), cy(10)); ctx.stroke();
+                // 2x2 = 12
+                ctx.strokeStyle = "#3b82f6"; ctx.beginPath(); ctx.moveTo(cx(0), cy(6)); ctx.lineTo(cx(6), cy(6)); ctx.stroke();
+                // 3x1+2x2=18
+                ctx.strokeStyle = "#eab308"; ctx.beginPath(); ctx.moveTo(cx(0), cy(9)); ctx.lineTo(cx(6), cy(0)); ctx.stroke();
+
+                // Coordinate Axes
+                ctx.strokeStyle = "#334155"; ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.moveTo(cx(0), cy(0)); ctx.lineTo(cx(6), cy(0)); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(cx(0), cy(0)); ctx.lineTo(cx(0), cy(10)); ctx.stroke();
+                ctx.fillStyle = "#1e293b"; ctx.font = "bold 14px sans-serif";
+                ctx.fillText("x1", cx(5.8), cy(0) - 10); ctx.fillText("x2", cx(0) + 10, cy(9.5));
+
+                // Moving Vertex (Point)
+                const p = stepData.leftPoint;
+                ctx.fillStyle = "#dc2626";
+                ctx.beginPath(); ctx.arc(cx(p.x), cy(p.y), 8, 0, Math.PI*2); ctx.fill();
+                ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+                ctx.fillStyle = "#1e293b"; ctx.fillText(`(${p.x}, ${p.y})`, cx(p.x) + 12, cy(p.y) - 12);
+            }, [stepData]);
+
+            return <canvas ref={canvasRef} width={400} height={350} className="w-full h-full object-contain" />;
+        };
+
+        const RightCanvas = ({ stepData }) => {
+            const canvasRef = useRef(null);
+
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                const w = canvas.width;
+                const h = canvas.height;
+                ctx.clearRect(0, 0, w, h);
+
+                // Math for custom Isometric projection
+                const originX = w / 2;
+                const originY = h - 60;
+                const scale = 50;
+                const iso = (x, y, z) => {
+                    const angX = Math.PI / 6; const angY = Math.PI / 6;
+                    const cx = originX + (y - x) * Math.cos(angX) * scale;
+                    const cy = originY - z * scale + (x + y) * Math.sin(angY) * scale;
+                    return { x: cx, y: cy };
+                };
+
+                // Draw 3D Axes
+                ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(originX, originY); ctx.lineTo(iso(4,0,0).x, iso(4,0,0).y); ctx.stroke(); // X
+                ctx.beginPath(); ctx.moveTo(originX, originY); ctx.lineTo(iso(0,4,0).x, iso(0,4,0).y); ctx.stroke(); // Y
+                ctx.beginPath(); ctx.moveTo(originX, originY); ctx.lineTo(iso(0,0,4).x, iso(0,0,4).y); ctx.stroke(); // Z
+                ctx.fillStyle = "#94a3b8"; ctx.font = "12px sans-serif";
+                ctx.fillText("约束1 维度", iso(4.2,0,0).x, iso(4.2,0,0).y);
+                ctx.fillText("约束2 维度", iso(0,4.2,0).x, iso(0,4.2,0).y);
+                ctx.fillText("约束3 维度", iso(0,0,4.2).x, iso(0,0,4.2).y);
+
+                // 3D Vector Points Definitions
+                const points = {
+                    1: {x: 1, y: 0, z: 3, label: "P1(x1)"},
+                    2: {x: 0, y: 2, z: 2, label: "P2(x2)"},
+                    3: {x: 1, y: 0, z: 0, label: "P3(s1)"},
+                    4: {x: 0, y: 1, z: 0, label: "P4(s2)"},
+                    5: {x: 0, y: 0, z: 1, label: "P5(s3)"}
+                };
+
+                // Draw Background Points & Dashed lines
+                Object.values(points).forEach(p => {
+                    const {x: cx, y: cy} = iso(p.x, p.y, p.z);
+                    ctx.strokeStyle = "#cbd5e1"; ctx.setLineDash([4, 4]);
+                    ctx.beginPath(); ctx.moveTo(originX, originY); ctx.lineTo(cx, cy); ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.fillStyle = "#94a3b8"; ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI*2); ctx.fill();
+                });
+
+                // Draw Current 3D Simplex (Triangle)
+                const bPts = stepData.rightBasis.map(idx => points[idx]);
+                
+                // Triangle Area Fill
+                ctx.fillStyle = "rgba(239, 68, 68, 0.25)";
+                ctx.beginPath();
+                bPts.forEach((p, i) => {
+                    const {x: cx, y: cy} = iso(p.x, p.y, p.z);
+                    if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+                });
+                ctx.closePath();
+                ctx.fill();
+
+                // Triangle Edges
+                ctx.strokeStyle = "#ef4444"; ctx.lineWidth = 3; ctx.lineJoin = "round";
+                ctx.stroke();
+
+                // Highlight Selected Basis Points
+                bPts.forEach(p => {
+                    const {x: cx, y: cy} = iso(p.x, p.y, p.z);
+                    ctx.fillStyle = "#ef4444"; ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI*2); ctx.fill();
+                    ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+                    ctx.fillStyle = "#1e293b"; ctx.font = "bold 14px sans-serif";
+                    ctx.fillText(p.label, cx + 10, cy - 10);
+                });
+
+            }, [stepData]);
+
+            return <canvas ref={canvasRef} width={400} height={350} className="w-full h-full object-contain" />;
+        };
+
+        const SimplexTableau = ({ stepData }) => {
+            const { tableau, pivotRow, pivotCol } = stepData;
+            return (
+                <div className="w-full overflow-x-auto">
+                    <table className="w-full text-sm text-center border-collapse">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-700">
+                            <tr>
+                                {tableau[0].map((header, i) => (
+                                    <th key={i} className={`p-2 font-semibold ${i === pivotCol ? 'bg-amber-100 text-amber-800' : ''}`}>
+                                        {header.includes('x') || header.includes('s') ? (
+                                            <span>{header[0]}<sub>{header[1]}</sub></span>
+                                        ) : header}
+                                    </th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {tableau.slice(1).map((row, rIdx) => {
+                                const isZRow = rIdx === tableau.length - 2; 
+                                const actualRowIdx = rIdx + 1;
+                                const isPivotRow = actualRowIdx === pivotRow;
+                                return (
+                                    <tr key={rIdx} className={`border-b border-slate-100 ${isZRow ? 'bg-slate-50 font-bold' : ''}`}>
+                                        {row.map((cell, cIdx) => {
+                                            const isPivotCol = cIdx === pivotCol;
+                                            const isPivotCell = isPivotRow && isPivotCol;
+                                            
+                                            // Handle subscript rendering
+                                            let displayCell = cell;
+                                            if (cIdx === 0 && (cell.startsWith('x') || cell.startsWith('s'))) {
+                                                displayCell = <span>{cell[0]}<sub>{cell[1]}</sub></span>;
+                                            }
+
+                                            return (
+                                                <td key={cIdx} className={`p-2
+                                                    ${isPivotCol ? 'bg-amber-50' : ''} 
+                                                    ${isPivotRow ? 'bg-indigo-50' : ''}
+                                                    ${isPivotCell ? 'bg-indigo-600 text-white font-bold ring-2 ring-indigo-300 shadow-inner' : 'text-slate-600'}
+                                                `}>
+                                                    {displayCell}
+                                                </td>
+                                            )
+                                        })}
+                                    </tr>
+                                )
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [stepIdx, setStepIdx] = useState(0);
+            const data = STEPS[stepIdx];
+
+            return (
+                <div className="fixed-layout-wrapper">
+                    {/* Header Block */}
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex justify-between items-center shrink-0">
+                        <div>
+                            <h1 className="text-2xl font-bold text-slate-800">单纯形法：三维空间翻转大一统揭秘</h1>
+                            <p className="text-slate-500 mt-1">原问题: Max Z = 3x<sub>1</sub> + 5x<sub>2</sub> | 约束: x<sub>1</sub> ≤ 4, 2x<sub>2</sub> ≤ 12, 3x<sub>1</sub> + 2x<sub>2</sub> ≤ 18</p>
+                        </div>
+                        <div className="flex gap-4">
+                            <button onClick={() => setStepIdx(0)} disabled={stepIdx === 0} className="px-6 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg transition-colors disabled:opacity-50">重置</button>
+                            <button onClick={() => setStepIdx(s => Math.min(s + 1, 2))} disabled={stepIdx === 2} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-md transition-transform active:scale-95 disabled:opacity-50 disabled:bg-indigo-400">
+                                {stepIdx === 2 ? '已最优' : '下一步 (Pivoting)'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Spaces View Block */}
+                    <div className="flex gap-6 flex-wrap lg:flex-nowrap shrink-0">
+                        {/* Solution Space */}
+                        <div className="flex-1 flex flex-col bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="bg-emerald-50 px-4 py-3 border-b border-emerald-100 font-bold text-emerald-800 text-lg">
+                                <span className="bg-emerald-200 text-emerald-800 px-2 py-0.5 rounded text-sm mr-2">解空间 (二维)</span> {data.leftTitle}
+                            </div>
+                            <div className="p-4 flex flex-col flex-1">
+                                <div className="canvas-box bg-slate-50 rounded-xl border border-slate-200 p-2 mb-4"><LeftCanvas stepData={data} /></div>
+                                <div className="explanation-box bg-slate-50 rounded-xl p-3 border-l-4 border-emerald-500 text-slate-700 text-[15px] leading-relaxed whitespace-pre-line flex flex-col justify-center">{data.leftDesc}</div>
+                            </div>
+                        </div>
+
+                        {/* Column Space */}
+                        <div className="flex-1 flex flex-col bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden relative">
+                            <div className="absolute top-0 right-0 bg-red-500 text-white text-sm font-black px-4 py-1.5 rounded-bl-xl shadow-sm z-10">终极揭秘！</div>
+                            <div className="bg-red-50 px-4 py-3 border-b border-red-100 font-bold text-red-800 text-lg">
+                                <span className="bg-red-200 text-red-800 px-2 py-0.5 rounded text-sm mr-2">列空间 (三维)</span> {data.rightTitle}
+                            </div>
+                            <div className="p-4 flex flex-col flex-1">
+                                <div className="canvas-box bg-slate-50 rounded-xl border border-slate-200 p-2 mb-4 relative">
+                                    <RightCanvas stepData={data} />
+                                    <div className="absolute top-4 left-4 right-4 text-center text-xs font-bold text-slate-400 bg-white/80 py-1 rounded border border-slate-200">
+                                        透视投影：3个基向量在空间中连成一个三角形
+                                    </div>
+                                </div>
+                                <div className="explanation-box bg-red-50 rounded-xl p-3 border-l-4 border-red-500 text-slate-800 font-medium text-[15px] leading-relaxed whitespace-pre-line shadow-inner flex flex-col justify-center">{data.rightDesc}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Tableau View Block */}
+                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden shrink-0">
+                        <div className="bg-indigo-50 px-4 py-3 border-b border-indigo-100 font-bold text-indigo-800 text-lg flex items-center justify-between">
+                            <div><span className="bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded text-sm mr-2">代数引擎</span> 同步单纯形表</div>
+                            <div className="text-xs font-normal text-indigo-600 bg-indigo-100 px-3 py-1 rounded-full">进基列(黄) / 出基行(浅蓝) / 翻转轴心主元(深蓝)</div>
+                        </div>
+                        <div className="p-4">
+                            <SimplexTableau stepData={data} />
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

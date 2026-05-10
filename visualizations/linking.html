@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSAPP 链接机制全景演示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        /* 基础滚动条美化 */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        /* 动态部分暗色滚动条 */
+        .dark-scroll::-webkit-scrollbar-thumb { background: #475569; }
+        .dark-scroll::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        body, html { margin: 0; padding: 0; height: 100%; background-color: #f8fafc; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        
+        /* 通用指令行样式 */
+        .inst-row { display: flex; align-items: baseline; padding: 4px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 0.875rem; transition: all 0.3s ease; border-radius: 4px; }
+        .inst-addr { width: 85px; flex-shrink: 0; font-size: 0.8rem; user-select: none; }
+        .inst-code { flex-grow: 1; font-weight: 500; }
+        
+        /* 动画定义 */
+        @keyframes flow-right { 0% { transform: translateX(-5px); opacity: 0.3; } 50% { transform: translateX(5px); opacity: 1; } 100% { transform: translateX(-5px); opacity: 0.3; } }
+        @keyframes flow-left { 0% { transform: translateX(5px); opacity: 0.3; } 50% { transform: translateX(-5px); opacity: 1; } 100% { transform: translateX(5px); opacity: 0.3; } }
+        .anim-flow-r { animation: flow-right 1.5s infinite; }
+        .anim-flow-l { animation: flow-left 1.5s infinite; }
+    </style>
+</head>
+<body class="overflow-hidden">
+    <div id="root" class="h-full w-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // ==========================================
+        // Data & Logic for Static Linking
+        // ==========================================
+        const STATIC_STEPS = [
+            { id: 0, title: "初始状态", desc: "编译器生成了 main.o 和 math.o。此时各文件内部地址均为相对地址 (0x000000 起始)。外部符号引用（如 call add）的地址为占位符 0x000000。" },
+            { id: 1, title: "符号解析 (Symbol Resolution)", desc: "链接器扫描各文件。发现 main.o 中外部符号 'add'（状态 UNDEF），在 math.o 的符号表中找到该全局符号定义并建立映射。" },
+            { id: 2, title: "节合并与内存映射", desc: "链接器将多个 .o 文件的同名节（如 .text, .data）合并。此时为程序分配最终运行时的绝对虚拟地址（从 0x400000 起始）。" },
+            { id: 3, title: "重定位 (Relocating References)", desc: "根据重定位条目，链接器覆写指令。main.o 中的 call 0x000000 占位符，被修补(Patch)为指向合并后 math.o 代码的绝对地址 0x400050。" },
+            { id: 4, title: "链接完成", desc: "生成可执行目标文件 (prog)。所有符号均已解析，所有地址均为绝对虚拟地址，准备就绪可被加载器加载执行。" }
+        ];
+
+        // ==========================================
+        // Data & Logic for Dynamic Linking
+        // ==========================================
+        const DYNAMIC_STEPS = [
+            { id: 0, title: "初始状态 (刚加载)", desc: "此时可执行文件已加载。对于外部函数 printf，其 GOT 表项记录的地址指向 PLT 表中的下一条指令，这是“延迟绑定”的初始状态。" },
+            { id: 1, title: "第 1 次调用：执行 call printf@plt", desc: "主程序执行 call printf@plt，程序控制流跳转到 .plt 节中专门为 printf 生成的桩代码 (Stub)。" },
+            { id: 2, title: "第 1 次调用：读取 GOT 表", desc: "PLT 桩代码执行 jmp *GOT[printf]，即间接跳转。由于是首次执行，GOT 表内的数据让控制流又跳回了 PLT 的后半部分。" },
+            { id: 3, title: "第 1 次调用：触发动态链接器", desc: "PLT 代码压入该符号的 ID，随后跳转到动态链接器 (ld-linux.so)。动态链接器在内存中找到 libc.so 里真实 printf 的地址 (0x7F000)。" },
+            { id: 4, title: "第 1 次调用：覆写 GOT 表", desc: "动态链接器将查找到的真实 printf 地址 (0x7F000) 写入到数据段中的 GOT[printf] 位置。从此刻起，GOT 表被永久更新。" },
+            { id: 5, title: "第 1 次调用：执行真实函数", desc: "动态链接器完成其工作，将控制权移交给 libc.so 中的真实 printf 函数开始执行系统调用。" },
+            { id: 6, title: "第 2 次调用：再次执行 call", desc: "一段时间后，主程序第二次调用 printf。控制流再次来到 PLT 桩代码。" },
+            { id: 7, title: "第 2 次调用：GOT 表直接跳转 (Fast Path)", desc: "PLT 再次执行 jmp *GOT[printf]。由于 GOT 表在首次调用时已被覆写为真实地址，这次直接跳转到 libc.so，无需动态链接器介入。延迟绑定优化体现！" }
+        ];
+
+        // ==========================================
+        // Component: Static Linking View
+        // ==========================================
+        function StaticLinkingView() {
+            const [step, setStep] = useState(0);
+            const isStep = (s) => step >= s;
+            const isCur = (s) => step === s;
+
+            return (
+                <div className="flex flex-col h-full bg-white">
+                    {/* Control Bar */}
+                    <div className="bg-slate-800 text-white p-4 flex flex-col md:flex-row gap-4 items-start md:items-center justify-between shadow-md z-10 shrink-0">
+                        <div className="flex-1">
+                            <h2 className="text-xl font-bold text-blue-300 mb-1">静态链接 (Static Linking)</h2>
+                            <div className="text-sm text-slate-300 bg-slate-900 p-2 rounded border border-slate-700 min-h-[40px] flex items-center">
+                                <span className="text-blue-400 font-bold mr-3 whitespace-nowrap">Step {step}/4:</span>
+                                <span>{STATIC_STEPS[step].desc}</span>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                            <button onClick={() => setStep(s => Math.max(0, s - 1))} disabled={step === 0} className="px-4 py-1.5 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 rounded text-sm transition-colors">上一步</button>
+                            <button onClick={() => setStep(s => Math.min(STATIC_STEPS.length - 1, s + 1))} disabled={step === 4} className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-sm font-bold shadow-lg shadow-blue-500/30 transition-colors">下一步</button>
+                            <button onClick={() => setStep(0)} className="px-4 py-1.5 bg-rose-600 hover:bg-rose-500 rounded text-sm ml-2 transition-colors">重置</button>
+                        </div>
+                    </div>
+
+                    {/* Main Workspace (3 columns layout) */}
+                    <div className="flex-1 overflow-hidden flex flex-col md:flex-row p-4 gap-4 bg-slate-50">
+                        
+                        {/* Left: Input Objects */}
+                        <div className="w-full md:w-1/3 flex flex-col gap-4 overflow-y-auto pr-2 pb-4">
+                            <div className="sticky top-0 bg-slate-50 py-2 border-b-2 border-slate-300 font-bold text-slate-700 z-10 flex items-center">
+                                <span className="w-3 h-3 rounded-full bg-slate-400 mr-2 inline-block"></span>
+                                输入: 可重定位目标文件 (.o)
+                            </div>
+                            
+                            {/* main.o */}
+                            <div className={`bg-white border rounded-lg shadow-sm transition-opacity duration-500 ${isStep(2) ? 'opacity-40 border-slate-200' : 'opacity-100 border-slate-300'}`}>
+                                <div className="bg-slate-100 px-3 py-2 font-bold text-slate-700 text-sm border-b">main.o (相对地址 0x00 起)</div>
+                                <div className="p-3 space-y-3">
+                                    <div className="border border-blue-200 bg-blue-50/50 rounded overflow-hidden">
+                                        <div className="text-xs font-bold bg-blue-100/80 text-blue-800 px-2 py-1">.text</div>
+                                        <div className="inst-row"><span className="inst-addr text-slate-500">0x000000</span><span className="inst-code text-blue-900">_main:</span></div>
+                                        <div className={`inst-row ${isCur(0) ? 'bg-blue-100/50' : ''}`}>
+                                            <span className="inst-addr text-slate-500">0x000010</span>
+                                            <span className="inst-code text-blue-900">
+                                                call <span className={`px-1 rounded transition-colors ${isCur(1) ? 'bg-rose-200 text-rose-800 font-bold' : ''} ${isCur(0)? 'underline decoration-rose-500 decoration-wavy' : ''}`}>0x000000 (?)</span>
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div className="border border-green-200 bg-green-50/50 rounded overflow-hidden">
+                                        <div className="text-xs font-bold bg-green-100/80 text-green-800 px-2 py-1">.data</div>
+                                        <div className="inst-row"><span className="inst-addr text-slate-500">0x000000</span><span className="inst-code text-green-900">array: [1, 2]</span></div>
+                                    </div>
+                                    <div className={`border rounded overflow-hidden transition-all duration-300 ${isCur(1) ? 'border-purple-400 shadow-md bg-purple-50' : 'border-purple-200 bg-white'}`}>
+                                        <div className="text-xs font-bold bg-purple-100/80 text-purple-800 px-2 py-1">.symtab (符号表)</div>
+                                        <table className="w-full text-xs text-left">
+                                            <tbody>
+                                                <tr className="border-b border-purple-100"><td className="px-2 py-1 text-slate-700">_main</td><td className="px-2 py-1 text-slate-500">.text</td></tr>
+                                                <tr className={`transition-colors ${isCur(1) ? 'bg-rose-100 font-bold' : ''}`}>
+                                                    <td className={`px-2 py-1 ${isCur(1) ? 'text-rose-700' : 'text-slate-700'}`}>add</td>
+                                                    <td className={`px-2 py-1 ${isCur(1) ? 'text-rose-600' : 'text-slate-500'}`}>UNDEF (EXTERN)</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* math.o */}
+                            <div className={`bg-white border rounded-lg shadow-sm transition-opacity duration-500 ${isStep(2) ? 'opacity-40 border-slate-200' : 'opacity-100 border-slate-300'}`}>
+                                <div className="bg-slate-100 px-3 py-2 font-bold text-slate-700 text-sm border-b">math.o (相对地址 0x00 起)</div>
+                                <div className="p-3 space-y-3">
+                                    <div className="border border-blue-200 bg-blue-50/50 rounded overflow-hidden">
+                                        <div className="text-xs font-bold bg-blue-100/80 text-blue-800 px-2 py-1">.text</div>
+                                        <div className={`inst-row ${isCur(1) ? 'bg-emerald-100/50' : ''}`}>
+                                            <span className="inst-addr text-slate-500">0x000000</span>
+                                            <span className={`inst-code ${isCur(1) ? 'text-emerald-800 font-bold' : 'text-blue-900'}`}>add:</span>
+                                        </div>
+                                        <div className="inst-row"><span className="inst-addr text-slate-500">0x000008</span><span className="inst-code text-blue-900">ret a+b;</span></div>
+                                    </div>
+                                    <div className={`border rounded overflow-hidden transition-all duration-300 ${isCur(1) ? 'border-purple-400 shadow-md bg-purple-50' : 'border-purple-200 bg-white'}`}>
+                                        <div className="text-xs font-bold bg-purple-100/80 text-purple-800 px-2 py-1">.symtab (符号表)</div>
+                                        <table className="w-full text-xs text-left">
+                                            <tbody>
+                                                <tr className={`transition-colors ${isCur(1) ? 'bg-emerald-100 font-bold' : ''}`}>
+                                                    <td className={`px-2 py-1 ${isCur(1) ? 'text-emerald-800' : 'text-slate-700'}`}>add</td>
+                                                    <td className="px-2 py-1 text-slate-500">GLOBAL .text</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Center: Linker Action Animation */}
+                        <div className="w-full md:w-1/4 min-h-[150px] md:min-h-0 flex flex-col justify-center items-center relative py-4 md:py-0 shrink-0">
+                            {/* Background Dashed Line mapping */}
+                            <div className="absolute top-1/2 left-0 right-0 border-t-2 border-dashed border-slate-300 -z-10 hidden md:block"></div>
+                            
+                            <div className="bg-white border shadow-xl rounded-xl p-4 w-11/12 max-w-[240px] aspect-square flex flex-col items-center justify-center relative z-0 transition-all duration-500"
+                                 style={{ borderColor: isCur(0) ? '#cbd5e1' : (isCur(4) ? '#10b981' : '#3b82f6') }}>
+                                <div className="absolute -top-3 bg-slate-700 text-white text-xs px-3 py-1 rounded-full uppercase tracking-widest shadow-sm">
+                                    Linker (ld)
+                                </div>
+                                
+                                <div className="text-center">
+                                    {isCur(0) && <span className="text-slate-400 font-bold">等待执行...</span>}
+                                    {isCur(1) && <div className="text-purple-600 font-bold animate-pulse text-sm">解析符号关联...<br/><span className="text-xs text-slate-500 mt-1 block">UNDEF -> GLOBAL</span></div>}
+                                    {isCur(2) && <div className="text-blue-600 font-bold text-sm">分配绝对地址...<br/><span className="text-xs text-slate-500 mt-1 block">合并 .text 与 .data</span></div>}
+                                    {isCur(3) && <div className="text-orange-600 font-bold text-sm animate-pulse">应用重定位表...<br/><span className="text-xs text-slate-500 mt-1 block">Patch 占位符指令</span></div>}
+                                    {isCur(4) && <div className="text-emerald-600 font-bold text-lg">✅ 链接成功</div>}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Right: Output Executable */}
+                        <div className="w-full md:w-5/12 flex flex-col gap-4 overflow-y-auto pl-2 pb-4">
+                            <div className="sticky top-0 bg-slate-50 py-2 border-b-2 border-blue-400 font-bold text-blue-700 z-10 flex items-center">
+                                <span className="w-3 h-3 rounded-full bg-blue-500 mr-2 inline-block"></span>
+                                输出: 可执行文件 (Executable)
+                            </div>
+                            
+                            <div className={`bg-white border-2 border-blue-400 rounded-lg shadow-lg overflow-hidden transition-all duration-700 transform flex-1 flex flex-col
+                                ${isStep(2) ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8 pointer-events-none'}`}>
+                                <div className="bg-blue-600 px-3 py-2 text-white flex justify-between items-center shrink-0">
+                                    <span className="font-bold">prog (a.out)</span>
+                                    <span className="text-xs font-mono bg-blue-800 px-2 py-0.5 rounded">绝对地址</span>
+                                </div>
+                                
+                                <div className="p-3 space-y-4 overflow-y-auto flex-1 bg-slate-50">
+                                    {/* Merged .text */}
+                                    <div className={`bg-white border-2 rounded overflow-hidden transition-all duration-500 ${isCur(2) ? 'border-blue-400 shadow-md' : 'border-blue-100'}`}>
+                                        <div className="text-xs font-bold bg-blue-50 text-blue-800 px-3 py-1.5 border-b border-blue-100 flex justify-between">
+                                            <span>合并后的 .text 节</span>
+                                            <span className="font-mono">Start: 0x400000</span>
+                                        </div>
+                                        <div className="p-2 space-y-3">
+                                            <div className="relative pl-3 border-l-[3px] border-slate-300 ml-1">
+                                                <span className="absolute -left-1.5 -top-2 bg-slate-100 text-[10px] text-slate-500 px-1 rounded border">from main.o</span>
+                                                <div className="inst-row mt-3"><span className="inst-addr text-blue-600 font-bold">0x400000</span><span className="inst-code text-slate-800">_main:</span></div>
+                                                <div className={`inst-row relative ${isCur(3) ? 'bg-orange-50 rounded' : ''}`}>
+                                                    <span className="inst-addr text-blue-600 font-bold">0x400010</span>
+                                                    <span className="inst-code text-slate-800 flex items-center">
+                                                        call 
+                                                        <span className={`ml-2 px-1.5 py-0.5 rounded text-xs font-bold transition-colors duration-500 
+                                                            ${isStep(3) ? (isCur(3) ? 'bg-orange-500 text-white shadow' : 'bg-emerald-100 text-emerald-800') : 'bg-rose-100 text-rose-600'}`}>
+                                                            {isStep(3) ? '0x400050' : '0x000000 (?)'}
+                                                        </span>
+                                                    </span>
+                                                    {isCur(3) && <span className="absolute right-2 text-xs font-bold text-orange-600 animate-pulse hidden xl:block">← 覆写完成</span>}
+                                                </div>
+                                            </div>
+                                            <div className="relative pl-3 border-l-[3px] border-slate-300 ml-1">
+                                                <span className="absolute -left-1.5 -top-2 bg-slate-100 text-[10px] text-slate-500 px-1 rounded border">from math.o</span>
+                                                <div className="inst-row mt-3"><span className="inst-addr text-blue-600 font-bold">0x400050</span><span className="inst-code text-slate-800">add:</span></div>
+                                                <div className="inst-row"><span className="inst-addr text-blue-600 font-bold">0x400058</span><span className="inst-code text-slate-800">ret a+b;</span></div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Merged .data */}
+                                    <div className={`bg-white border-2 rounded overflow-hidden transition-all duration-500 ${isCur(2) ? 'border-green-400 shadow-md' : 'border-green-100'}`}>
+                                        <div className="text-xs font-bold bg-green-50 text-green-800 px-3 py-1.5 border-b border-green-100 flex justify-between">
+                                            <span>合并后的 .data 节</span>
+                                            <span className="font-mono">Start: 0x600000</span>
+                                        </div>
+                                        <div className="p-2">
+                                            <div className="pl-3 border-l-[3px] border-slate-300 ml-1">
+                                                <div className="inst-row"><span className="inst-addr text-green-600 font-bold">0x600000</span><span className="inst-code text-slate-800">array: [1, 2]</span></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // Component: Dynamic Linking View
+        // ==========================================
+        function DynamicLinkingView() {
+            const [step, setStep] = useState(0);
+            
+            const isCur = (s) => step === s;
+            const isFirstCall = step >= 1 && step <= 5;
+            const isSecondCall = step >= 6;
+            
+            // 状态衍生的动态数据
+            const gotValue = step >= 4 ? "0x7F000 (libc.so)" : "0x40036 (.plt 内)";
+            const gotColorClass = step >= 4 ? "text-emerald-300 font-bold bg-emerald-900/30" : "text-blue-300 bg-blue-900/20";
+            
+            return (
+                <div className="flex flex-col h-full bg-slate-900">
+                    {/* Control Bar (Dark Theme) */}
+                    <div className="bg-slate-950 text-slate-200 p-4 flex flex-col md:flex-row gap-4 items-start md:items-center justify-between border-b border-slate-800 z-10 shrink-0">
+                        <div className="flex-1">
+                            <h2 className="text-xl font-bold text-emerald-400 mb-1">动态链接 (Dynamic Linking) & 延迟绑定</h2>
+                            <div className="text-sm text-slate-400 bg-slate-900/50 p-2 rounded border border-slate-700 min-h-[40px] flex items-center">
+                                <span className="text-emerald-500 font-bold mr-3 whitespace-nowrap">Step {step}/7:</span>
+                                <span>{DYNAMIC_STEPS[step].desc}</span>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                            <button onClick={() => setStep(s => Math.max(0, s - 1))} disabled={step === 0} className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 disabled:opacity-50 rounded text-sm transition-colors">上一步</button>
+                            <button onClick={() => setStep(s => Math.min(DYNAMIC_STEPS.length - 1, s + 1))} disabled={step === 7} className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-50 rounded text-sm font-bold shadow-lg shadow-emerald-900/50 transition-colors">下一步</button>
+                            <button onClick={() => setStep(0)} className="px-4 py-1.5 bg-rose-900/60 hover:bg-rose-800 text-rose-200 border border-rose-800/50 rounded text-sm ml-2 transition-colors">重置</button>
+                        </div>
+                    </div>
+
+                    {/* Main Workspace (Grid Layout for better space utilization) */}
+                    <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-800 via-slate-900 to-slate-950 dark-scroll">
+                        
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-7xl mx-auto h-full">
+                            
+                            {/* Column 1: Executable Space */}
+                            <div className="flex flex-col gap-4">
+                                <div className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-700 pb-2 flex justify-between">
+                                    <span>可执行文件区域 (只读)</span>
+                                </div>
+                                
+                                {/* .text */}
+                                <div className="bg-slate-800/60 rounded-lg border border-slate-700 shadow-lg overflow-hidden">
+                                    <div className="bg-slate-800/80 px-3 py-1.5 text-xs font-mono text-slate-400 border-b border-slate-700">.text (代码段)</div>
+                                    <div className="p-2">
+                                        <div className="inst-row"><span className="inst-addr text-slate-500">0x40010</span><span className="inst-code text-slate-300">_main:</span></div>
+                                        <div className={`inst-row ${isCur(1) ? 'bg-blue-900/40 border-l-2 border-blue-400' : 'border-l-2 border-transparent'}`}>
+                                            <span className="inst-addr text-slate-500">0x40015</span>
+                                            <span className="inst-code text-emerald-300">call 0x40030 <span className="text-slate-500 text-xs ml-1">// 第 1 次调 printf</span></span>
+                                        </div>
+                                        <div className="inst-row my-1"><span className="inst-addr text-slate-600">...</span><span className="inst-code text-slate-600">...</span></div>
+                                        <div className={`inst-row ${isCur(6) ? 'bg-blue-900/40 border-l-2 border-blue-400' : 'border-l-2 border-transparent'}`}>
+                                            <span className="inst-addr text-slate-500">0x40020</span>
+                                            <span className="inst-code text-emerald-300">call 0x40030 <span className="text-slate-500 text-xs ml-1">// 第 2 次调 printf</span></span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* .plt */}
+                                <div className={`bg-slate-800/60 rounded-lg border overflow-hidden shadow-lg transition-colors duration-300 
+                                    ${(isCur(2) || isCur(3) || isCur(7)) ? 'border-blue-500 shadow-blue-900/20' : 'border-slate-700'}`}>
+                                    <div className="bg-blue-950/40 px-3 py-1.5 text-xs font-mono text-blue-300 border-b border-slate-700">.plt (过程链接表)</div>
+                                    <div className="p-2">
+                                        <div className="inst-row"><span className="inst-addr text-blue-400 w-auto mr-2">printf@plt:</span></div>
+                                        <div className={`inst-row ${isCur(2) || isCur(7) ? 'bg-blue-900/40 border-l-2 border-blue-400' : 'border-l-2 border-transparent'}`}>
+                                            <span className="inst-addr text-slate-500">0x40030</span>
+                                            <span className="inst-code text-yellow-200">jmp *GOT[printf]</span>
+                                        </div>
+                                        <div className={`inst-row transition-opacity duration-300 ${step >= 4 ? 'opacity-30' : 'opacity-100'} ${isCur(3) ? 'bg-rose-900/30 border-l-2 border-rose-400' : 'border-l-2 border-transparent'}`}>
+                                            <span className="inst-addr text-slate-500">0x40036</span>
+                                            <span className="inst-code text-rose-300">push id(printf)</span>
+                                        </div>
+                                        <div className={`inst-row transition-opacity duration-300 ${step >= 4 ? 'opacity-30' : 'opacity-100'} ${isCur(3) ? 'bg-rose-900/30 border-l-2 border-rose-400' : 'border-l-2 border-transparent'}`}>
+                                            <span className="inst-addr text-slate-500">0x4003B</span>
+                                            <span className="inst-code text-rose-300">jmp dl_resolve</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Column 2: Data Space (GOT) */}
+                            <div className="flex flex-col justify-center items-center gap-4 relative py-8 lg:py-0">
+                                {/* Visual Connectors (Desktop only) */}
+                                <div className="hidden lg:block absolute left-[-20px] top-[40%] text-blue-500/70 text-2xl font-bold">
+                                    {(isCur(2) || isCur(7)) && <div className="anim-flow-r">→</div>}
+                                </div>
+                                <div className="hidden lg:block absolute right-[-20px] top-[45%] text-purple-500/70 text-2xl font-bold">
+                                    {isCur(4) && <div className="anim-flow-l">←</div>}
+                                </div>
+                                <div className="hidden lg:block absolute right-[-20px] top-[75%] text-emerald-500/70 text-2xl font-bold">
+                                    {(isCur(5) || isCur(7)) && <div className="anim-flow-r">→</div>}
+                                </div>
+
+                                <div className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-700 pb-2 w-full text-center">
+                                    <span>数据区域 (读写)</span>
+                                </div>
+                                
+                                <div className={`w-full max-w-[320px] bg-slate-800/80 rounded-xl border-2 overflow-hidden transition-all duration-500 shadow-xl
+                                    ${isCur(4) ? 'border-purple-500 shadow-purple-900/30 transform scale-105 z-10' : 'border-emerald-800'}`}>
+                                    <div className="bg-emerald-950/50 px-3 py-2 text-sm font-mono text-emerald-400 border-b border-emerald-900/50 text-center font-bold">
+                                        .got.plt (全局偏移表)
+                                    </div>
+                                    <div className="p-4 flex flex-col gap-3">
+                                        
+                                        <div className="flex bg-slate-900 border border-slate-700 rounded overflow-hidden opacity-50">
+                                            <div className="bg-slate-800 px-2 py-1 text-xs font-mono text-slate-500 border-r border-slate-700 w-24 flex items-center">GOT[1]</div>
+                                            <div className="px-2 py-1 text-xs font-mono text-slate-400 truncate flex items-center">link_map (模块信息)</div>
+                                        </div>
+                                        
+                                        <div className={`flex border-2 rounded overflow-hidden transition-all duration-300 relative bg-slate-900
+                                            ${(isCur(2)||isCur(7)) ? 'border-blue-500' : (isCur(4) ? 'border-purple-500' : 'border-slate-600')}`}>
+                                            <div className="bg-slate-800 px-2 py-3 text-xs font-mono text-slate-300 border-r border-slate-700 w-24 flex items-center shrink-0">GOT[printf]</div>
+                                            <div className={`px-2 py-3 text-sm font-mono flex items-center truncate w-full transition-colors duration-300 ${gotColorClass}`}>
+                                                {gotValue}
+                                            </div>
+                                            {isCur(4) && <div className="absolute right-2 top-0 bottom-0 flex items-center text-xs text-purple-300 font-bold animate-pulse">Patched!</div>}
+                                        </div>
+                                    </div>
+                                    
+                                    {/* Exaplanation Banner inside GOT card */}
+                                    <div className="bg-slate-900 px-3 py-2 text-xs text-slate-400 border-t border-slate-700 min-h-[40px] flex items-center justify-center text-center">
+                                        {step < 4 ? "初始状态：指向 PLT 内部的指令。触发动态解析流程。" : "已更新：指向 libc.so 中真实的 printf 绝对地址。"}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Column 3: Shared Libs Space */}
+                            <div className="flex flex-col gap-4">
+                                <div className="text-xs font-bold text-purple-300/80 uppercase tracking-widest border-b border-purple-900/30 pb-2 flex justify-between">
+                                    <span>共享库空间 (Shared)</span>
+                                </div>
+                                
+                                {/* Dynamic Linker */}
+                                <div className={`bg-slate-800/60 rounded-lg border-2 overflow-hidden transition-all duration-500 shadow-lg
+                                    ${isCur(3) || isCur(4) ? 'border-purple-500 shadow-purple-900/20 bg-purple-900/10' : 'border-slate-700'}`}>
+                                    <div className="bg-slate-800/80 px-3 py-1.5 text-xs font-mono text-slate-400 border-b border-slate-700 flex justify-between">
+                                        <span>ld-linux.so (动态链接器)</span>
+                                    </div>
+                                    <div className="p-3">
+                                        <div className={`text-xs font-mono leading-relaxed transition-opacity duration-300 ${isCur(3) || isCur(4) ? 'text-purple-300 opacity-100' : 'text-slate-500 opacity-40'}`}>
+                                            <div className={isCur(3) ? 'font-bold text-white' : ''}>1. 接收符号 id(printf)</div>
+                                            <div className={isCur(3) ? 'font-bold text-white' : ''}>2. 查找共享库符号表... 找到地址 0x7F000</div>
+                                            <div className={isCur(4) ? 'font-bold text-emerald-400' : ''}>3. 覆写目标 GOT 表项 (Patching)</div>
+                                            <div className={isCur(5) ? 'font-bold text-white' : ''}>4. 将控制权移交给 0x7F000</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* libc.so */}
+                                <div className={`bg-slate-800/60 rounded-lg border-2 overflow-hidden transition-all duration-500 shadow-lg mt-2
+                                    ${isCur(5) || isCur(7) ? 'border-emerald-500 shadow-emerald-900/20 bg-emerald-900/10' : 'border-slate-700'}`}>
+                                    <div className="bg-slate-800/80 px-3 py-1.5 text-xs font-mono text-slate-400 border-b border-slate-700 flex justify-between">
+                                        <span>libc.so (C 标准库)</span>
+                                    </div>
+                                    <div className="p-2">
+                                        <div className={`inst-row transition-opacity duration-300 ${isCur(5) || isCur(7) ? 'opacity-100 bg-emerald-900/30 border-l-2 border-emerald-400' : 'opacity-40 border-l-2 border-transparent'}`}>
+                                            <span className="inst-addr text-emerald-400 font-bold">0x7F000</span>
+                                            <span className="inst-code text-emerald-200">printf:</span>
+                                        </div>
+                                        <div className={`inst-row transition-opacity duration-300 ${isCur(5) || isCur(7) ? 'opacity-100 bg-emerald-900/30 border-l-2 border-emerald-400' : 'opacity-40 border-l-2 border-transparent'}`}>
+                                            <span className="inst-addr text-slate-500">0x7F005</span>
+                                            <span className="inst-code text-slate-300">... (系统调用打印内容) ...</span>
+                                        </div>
+                                        <div className={`inst-row transition-opacity duration-300 ${isCur(5) || isCur(7) ? 'opacity-100 bg-emerald-900/30 border-l-2 border-emerald-400' : 'opacity-40 border-l-2 border-transparent'}`}>
+                                            <span className="inst-addr text-slate-500">0x7F020</span>
+                                            <span className="inst-code text-purple-300">ret <span className="text-slate-500 text-xs ml-1">// 返回 main</span></span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // Main Application (Tabs container)
+        // ==========================================
+        function App() {
+            const [activeTab, setActiveTab] = useState('static');
+
+            return (
+                <div className="h-full flex flex-col bg-slate-200 p-2 sm:p-4 md:p-8">
+                    <div className="max-w-[1600px] w-full h-full mx-auto flex flex-col bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-300">
+                        
+                        {/* Tab Navigation */}
+                        <div className="flex bg-slate-100 border-b border-slate-300 shrink-0">
+                            <button 
+                                onClick={() => setActiveTab('static')}
+                                className={`flex-1 py-4 text-center font-bold text-lg transition-colors border-b-4 ${activeTab === 'static' ? 'bg-white text-blue-600 border-blue-600' : 'text-slate-500 border-transparent hover:bg-slate-200'}`}
+                            >
+                                第 1 部分：静态链接 (Static Linking)
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('dynamic')}
+                                className={`flex-1 py-4 text-center font-bold text-lg transition-colors border-b-4 ${activeTab === 'dynamic' ? 'bg-slate-900 text-emerald-400 border-emerald-500' : 'text-slate-500 border-transparent hover:bg-slate-200'}`}
+                            >
+                                第 2 部分：动态链接 (Dynamic Linking)
+                            </button>
+                        </div>
+
+                        {/* Content Area */}
+                        <div className="flex-1 overflow-hidden relative">
+                            {/* Static View */}
+                            <div className={`absolute inset-0 transition-opacity duration-500 ${activeTab === 'static' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+                                <StaticLinkingView />
+                            </div>
+                            
+                            {/* Dynamic View */}
+                            <div className={`absolute inset-0 transition-opacity duration-500 ${activeTab === 'dynamic' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+                                <DynamicLinkingView />
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

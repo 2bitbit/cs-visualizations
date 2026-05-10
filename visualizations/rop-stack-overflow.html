@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>动态演示：栈溢出与 ROP 栈对齐</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .stack-cell {
+            transition: background-color 0.5s ease, color 0.5s ease;
+        }
+        .pointer {
+            transition: top 0.5s ease;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans min-h-screen p-8">
+
+    <div class="max-w-6xl mx-auto flex flex-col lg:flex-row gap-8">
+        
+        <!-- 左侧面板：控制与解释 -->
+        <div class="lg:w-1/2 flex flex-col gap-6">
+            <h1 class="text-3xl font-bold text-blue-400">Pwn 栈溢出与对齐动态演示</h1>
+            
+            <div class="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-xl min-h-[340px]">
+                <h2 id="step-title" class="text-xl font-bold text-yellow-400 mb-4">步骤 0: 初始状态 (目标函数内部)</h2>
+                <p id="step-desc" class="text-gray-300 leading-relaxed text-sm">
+                    程序正在执行存在漏洞的函数。内存中分配了 32 字节的局部变量 <code>buffer</code>。在它上方（高地址处）存放着上一个函数的基址指针 (RBP) 和返回地址 (RIP)。此时寄存器 RSP 和 RBP 指向正常的栈帧位置。
+                </p>
+                <div class="mt-6 bg-black p-4 rounded text-sm font-mono text-green-400 border border-gray-700">
+                    <span class="text-gray-500">// 对应的 Python Payload:</span><br>
+                    <span id="code-highlight" class="text-white">等待构造 Payload...</span>
+                </div>
+            </div>
+
+            <div class="flex gap-4">
+                <button id="btn-prev" class="px-6 py-2 bg-gray-700 hover:bg-gray-600 rounded font-bold disabled:opacity-50" onclick="prevStep()" disabled>上一步</button>
+                <button id="btn-next" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded font-bold" onclick="nextStep()">下一步</button>
+                <button id="btn-reset" class="px-6 py-2 bg-red-600 hover:bg-red-500 rounded font-bold ml-auto" onclick="reset()">重置</button>
+            </div>
+        </div>
+
+        <!-- 右侧面板：内存结构可视化 -->
+        <div class="lg:w-1/2 bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-xl overflow-hidden flex flex-col items-center">
+            <h2 class="text-xl font-bold text-center mb-6 text-gray-400">系统内存栈 (Stack) 视图</h2>
+            
+            <!-- 严格三列布局，防止任何水平重叠 -->
+            <div class="flex justify-center relative w-full h-[448px] max-w-[600px]">
+                
+                <!-- 1. 左侧列：寄存器指针 -->
+                <div class="w-24 h-full relative flex-shrink-0">
+                    <div id="ptr-rsp" class="pointer absolute right-2 text-red-400 font-bold flex items-center justify-end whitespace-nowrap transform -translate-y-1/2" style="top: 392px;">
+                        RSP &rarr;
+                    </div>
+                    <div id="ptr-rbp" class="pointer absolute right-2 text-blue-400 font-bold flex items-center justify-end whitespace-nowrap transform -translate-y-1/2" style="top: 200px;">
+                        RBP &rarr;
+                    </div>
+                </div>
+
+                <!-- 2. 中间列：栈内存块 -->
+                <div class="w-72 border-2 border-gray-600 bg-gray-900 font-mono flex flex-col relative z-0 flex-shrink-0 shadow-lg">
+                    <!-- 顶端 Header -->
+                    <div class="h-8 border-b border-gray-700 flex items-center justify-center text-xs text-gray-400 bg-gray-800 flex-shrink-0">... 高地址 (栈底) ...</div>
+                    
+                    <!-- 栈单元格 (使用 Flex 排版避免内部字体重叠) -->
+                    <div id="mem-next2" class="stack-cell h-12 border-b border-gray-700 flex items-center px-3 flex-shrink-0">
+                        <span class="text-xs text-gray-500 w-20 flex-shrink-0 text-left">0x...d048</span>
+                        <span class="content text-sm text-gray-600 flex-1 text-center truncate font-bold">上层函数的栈帧数据</span>
+                    </div>
+
+                    <div id="mem-next1" class="stack-cell h-12 border-b border-gray-700 flex items-center px-3 flex-shrink-0">
+                        <span class="text-xs text-gray-500 w-20 flex-shrink-0 text-left">0x...d040</span>
+                        <span class="content text-sm text-gray-600 flex-1 text-center truncate font-bold">上层函数的栈帧数据</span>
+                    </div>
+
+                    <div id="mem-rip" class="stack-cell h-12 border-b border-gray-700 flex items-center px-3 bg-gray-800 flex-shrink-0">
+                        <span class="text-xs text-yellow-300 w-20 flex-shrink-0 text-left">0x...d038</span>
+                        <span class="content font-bold text-yellow-400 flex-1 text-center truncate">Saved RIP</span>
+                    </div>
+
+                    <div id="mem-rbp" class="stack-cell h-12 border-b-4 border-blue-500 flex items-center px-3 bg-gray-800 flex-shrink-0">
+                        <span class="text-xs text-blue-300 w-20 flex-shrink-0 text-left">0x...d030</span>
+                        <span class="content font-bold text-blue-400 flex-1 text-center truncate">Saved RBP</span>
+                    </div>
+
+                    <div id="mem-buf4" class="stack-cell h-12 border-b border-gray-700 flex items-center px-3 flex-shrink-0">
+                        <span class="text-xs text-gray-500 w-20 flex-shrink-0 text-left">0x...d028</span>
+                        <span class="content text-sm flex-1 text-center truncate">buffer [24-31]</span>
+                    </div>
+                    <div id="mem-buf3" class="stack-cell h-12 border-b border-gray-700 flex items-center px-3 flex-shrink-0">
+                        <span class="text-xs text-gray-500 w-20 flex-shrink-0 text-left">0x...d020</span>
+                        <span class="content text-sm flex-1 text-center truncate">buffer [16-23]</span>
+                    </div>
+                    <div id="mem-buf2" class="stack-cell h-12 border-b border-gray-700 flex items-center px-3 flex-shrink-0">
+                        <span class="text-xs text-gray-500 w-20 flex-shrink-0 text-left">0x...d018</span>
+                        <span class="content text-sm flex-1 text-center truncate">buffer [8-15]</span>
+                    </div>
+                    <div id="mem-buf1" class="stack-cell h-12 border-b border-gray-700 flex items-center px-3 flex-shrink-0">
+                        <span class="text-xs text-gray-500 w-20 flex-shrink-0 text-left">0x...d010</span>
+                        <span class="content text-sm flex-1 text-center truncate">buffer [0-7]</span>
+                    </div>
+
+                    <!-- 底端 Footer -->
+                    <div class="h-8 flex items-center justify-center text-xs text-gray-400 bg-gray-800 flex-shrink-0">... 低地址 (栈顶) ...</div>
+                </div>
+
+                <!-- 3. 右侧列：侧边说明标注 -->
+                <div class="w-36 h-full relative flex-shrink-0 ml-2">
+                    <div class="absolute left-1 flex items-center text-green-400 font-bold text-xs whitespace-nowrap transform -translate-y-1/2 drop-shadow-md" style="top: 56px;">
+                        &larr; ABI基准(尾号8)
+                    </div>
+                    <div class="absolute left-1 flex items-center text-red-400 font-bold text-xs whitespace-nowrap transform -translate-y-1/2 drop-shadow-md" style="top: 104px;">
+                        &larr; 无对齐(尾号0)
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 高度像素精确计算 (transform -translate-y-1/2 会使其精准对齐中心点):
+        // Header: 32px
+        // 单元格高度: 48px
+        // next2 (d048): 中心点 = 32 + (48/2) = 56px
+        // next1 (d040): 中心点 = 32 + 48 + 24 = 104px
+        // rip   (d038): 中心点 = 32 + 96 + 24 = 152px
+        // rbp   (d030): 中心点 = 32 + 144 + 24 = 200px
+        // buf4  (d028): 中心点 = 32 + 192 + 24 = 248px
+        // buf3  (d020): 中心点 = 32 + 240 + 24 = 296px
+        // buf2  (d018): 中心点 = 32 + 288 + 24 = 344px
+        // buf1  (d010): 中心点 = 32 + 336 + 24 = 392px
+        
+        const steps = [
+            {
+                title: "步骤 0: 初始状态",
+                desc: "程序正在执行存在漏洞的函数（如使用了 gets）。栈通常向低地址生长。此时分配了 32 字节的局部变量 <code>buffer</code>。在它高地址方向，存放着调用者的基址指针 (RBP) 和返回地址 (RIP)。此时 RSP 指向栈顶（低地址）。",
+                code: "io.recvuntil(b\"payload:\\n\")",
+                rspTop: 392, rbpTop: 200,
+                memStates: { buf1:"buffer [0-7]", buf2:"buffer [8-15]", buf3:"buffer [16-23]", buf4:"buffer [24-31]", rbp:"Saved RBP", rip:"Saved RIP", next1:"上层数据的尾部", next2:"上层数据的尾部" },
+                memColors: { buf1:"", buf2:"", buf3:"", buf4:"", rbp:"bg-gray-800", rip:"bg-gray-800", next1:"", next2:"" }
+            },
+            {
+                title: "步骤 1: 填充合法空间与覆盖 RBP",
+                desc: "攻击开始。我们发送了 40 个字节的 'A'。数据从低地址向高地址写入。前 32 个字节填满了 <code>buffer</code> 的合法空间，接下来的 8 个字节继续向上溢出，完全覆盖了保存的 RBP 的值。",
+                code: "offset = 32 + 8\npayload = b\"A\" * offset",
+                rspTop: 392, rbpTop: 200,
+                memStates: { buf1:"'AAAAAAAA'", buf2:"'AAAAAAAA'", buf3:"'AAAAAAAA'", buf4:"'AAAAAAAA'", rbp:"'AAAAAAAA'", rip:"Saved RIP", next1:"上层数据的尾部", next2:"上层数据的尾部" },
+                memColors: { buf1:"bg-red-900/50 text-red-400", buf2:"bg-red-900/50 text-red-400", buf3:"bg-red-900/50 text-red-400", buf4:"bg-red-900/50 text-red-400", rbp:"bg-red-900 text-red-400", rip:"bg-gray-800", next1:"", next2:"" }
+            },
+            {
+                title: "步骤 2: 注入 Ret Gadget 用于对齐",
+                desc: "接下来 8 字节，我们不直接填入 backdoor，而是填入一个单独的 <code>ret</code> 指令的地址 (Ret Gadget)。这一步覆盖了原程序的返回地址 (Saved RIP)。目的是利用这个 <code>ret</code> 额外弹栈一次，推动 RSP 指针向高地址移动。",
+                code: "payload = b\"A\" * offset + p64(ret_addr)",
+                rspTop: 392, rbpTop: 200,
+                memStates: { buf1:"'AAAAAAAA'", buf2:"'AAAAAAAA'", buf3:"'AAAAAAAA'", buf4:"'AAAAAAAA'", rbp:"'AAAAAAAA'", rip:"ret_addr", next1:"上层数据的尾部", next2:"上层数据的尾部" },
+                memColors: { buf1:"bg-red-900/50 text-red-400", buf2:"bg-red-900/50 text-red-400", buf3:"bg-red-900/50 text-red-400", buf4:"bg-red-900/50 text-red-400", rbp:"bg-red-900 text-red-400", rip:"bg-yellow-700 text-yellow-200 font-bold", next1:"", next2:"" }
+            },
+            {
+                title: "步骤 3: 注入后门函数地址",
+                desc: "紧接着，我们在更高位的内存地址写入真正的目标：<code>backdoor_addr</code>。至此，Payload 发送完毕。接下来看函数返回时程序如何被劫持。",
+                code: "payload = ... + p64(ret_addr) + p64(backdoor_addr)\nio.sendline(payload)",
+                rspTop: 392, rbpTop: 200,
+                memStates: { buf1:"'AAAAAAAA'", buf2:"'AAAAAAAA'", buf3:"'AAAAAAAA'", buf4:"'AAAAAAAA'", rbp:"'AAAAAAAA'", rip:"ret_addr", next1:"backdoor_addr", next2:"上层数据的尾部" },
+                memColors: { buf1:"bg-red-900/50 text-red-400", buf2:"bg-red-900/50 text-red-400", buf3:"bg-red-900/50 text-red-400", buf4:"bg-red-900/50 text-red-400", rbp:"bg-red-900 text-red-400", rip:"bg-yellow-700 text-yellow-200", next1:"bg-green-700 text-green-200 font-bold", next2:"" }
+            },
+            {
+                title: "步骤 4: 漏洞函数返回 - 执行 leave",
+                desc: "漏洞函数执行完毕，准备返回。首先执行 <code>leave</code> 指令（相当于 <code>mov rsp, rbp; pop rbp</code>）。RSP 先退回到 RBP 处，随后执行 pop 弹栈，此时 RBP 被塞入假数据，而 RSP 会顺着向高地址移动 8 字节，刚好指向被篡改的返回地址（RIP）。",
+                code: "io.interactive() // 等待劫持...",
+                rspTop: 152, rbpTop: -1000, // rsp moves to rip (152), rbp flies off screen
+                memStates: { buf1:"'AAAAAAAA'", buf2:"'AAAAAAAA'", buf3:"'AAAAAAAA'", buf4:"'AAAAAAAA'", rbp:"'AAAAAAAA'", rip:"ret_addr", next1:"backdoor_addr", next2:"上层数据的尾部" },
+                memColors: { buf1:"bg-gray-900 text-gray-500", buf2:"bg-gray-900 text-gray-500", buf3:"bg-gray-900 text-gray-500", buf4:"bg-gray-900 text-gray-500", rbp:"bg-gray-900 text-gray-500", rip:"bg-yellow-700 text-yellow-200", next1:"bg-green-700 text-green-200", next2:"" }
+            },
+            {
+                title: "步骤 5: 漏洞函数返回 - 首次执行 ret (关键错位)",
+                desc: "紧接着执行原程序的 <code>ret</code> (相当于 <code>pop rip</code>)。CPU 将 <code>ret_addr</code> 弹出。<br><span class='text-red-400 font-bold'>危险：</span>弹栈后 RSP 向高地址移动 8 字节，到达 <code>0x...d040</code>，尾号变为 0。<br><i>*System V ABI 规定：任何函数在开始执行第一条指令时，RSP 必须以 8 结尾。若此时立刻跳入 system，内部的 movaps 必定崩溃！</i>",
+                code: "RIP = ret_addr\nRSP = RSP + 8 (指向 0x...d040)",
+                rspTop: 104, rbpTop: -1000, // rsp moves to next1 (104)
+                memStates: { buf1:"...", buf2:"...", buf3:"...", buf4:"...", rbp:"...", rip:"(已弹出)", next1:"backdoor_addr", next2:"上层数据的尾部" },
+                memColors: { buf1:"", buf2:"", buf3:"", buf4:"", rbp:"", rip:"bg-gray-900 text-gray-600", next1:"bg-green-700 text-green-200 font-bold", next2:"" }
+            },
+            {
+                title: "步骤 6: 执行 Gadget - 第二次 ret (对齐完成!)",
+                desc: "CPU 接着执行我们塞入的无意义 <code>ret_addr</code>。它将栈顶的 <code>backdoor_addr</code> 弹出给 RIP。<br><span class='text-green-400 font-bold'>绝妙：</span>RSP 再次向高地址弹跳 8 字节，到达 <code>0x...d048</code>，尾号变为 8！<br>这完美契合了 ABI 规范要求的函数入口栈特征。系统函数不会察觉异常，顺利获取 Shell！",
+                code: "RIP = backdoor_addr\nRSP = RSP + 8 (指向 0x...d048)\n\n[+] 控制流已劫持，获取 Shell!",
+                rspTop: 56, rbpTop: -1000, // rsp moves to next2 (56)
+                memStates: { buf1:"...", buf2:"...", buf3:"...", buf4:"...", rbp:"...", rip:"...", next1:"(已弹出)", next2:"上层数据的尾部" },
+                memColors: { buf1:"", buf2:"", buf3:"", buf4:"", rbp:"", rip:"", next1:"bg-gray-900 text-gray-600", next2:"" }
+            }
+        ];
+
+        let currentStep = 0;
+
+        function updateUI() {
+            const step = steps[currentStep];
+            
+            document.getElementById('step-title').innerHTML = step.title;
+            document.getElementById('step-desc').innerHTML = step.desc;
+            document.getElementById('code-highlight').innerHTML = step.code.replace(/\n/g, '<br>');
+            
+            document.getElementById('ptr-rsp').style.top = step.rspTop + 'px';
+            document.getElementById('ptr-rbp').style.top = step.rbpTop + 'px';
+
+            const memKeys = ['buf1', 'buf2', 'buf3', 'buf4', 'rbp', 'rip', 'next1', 'next2'];
+            memKeys.forEach(key => {
+                const el = document.getElementById('mem-' + key);
+                el.querySelector('.content').innerHTML = step.memStates[key];
+                
+                // 重新应用 Flex 基础排版类，并附加颜色类
+                const baseClasses = "stack-cell h-12 border-b border-gray-700 flex items-center px-3 flex-shrink-0";
+                if (key === 'rbp') {
+                    el.className = `stack-cell h-12 border-b-4 border-blue-500 flex items-center px-3 flex-shrink-0 ${step.memColors[key] || 'bg-gray-800'}`;
+                } else {
+                    el.className = `${baseClasses} ${step.memColors[key]}`;
+                }
+            });
+
+            document.getElementById('btn-prev').disabled = currentStep === 0;
+            document.getElementById('btn-next').disabled = currentStep === steps.length - 1;
+
+            if (currentStep === steps.length - 1) {
+                document.getElementById('step-title').classList.add('text-green-400');
+                document.getElementById('step-title').classList.remove('text-yellow-400');
+            } else {
+                document.getElementById('step-title').classList.remove('text-green-400');
+                document.getElementById('step-title').classList.add('text-yellow-400');
+            }
+        }
+
+        function nextStep() {
+            if (currentStep < steps.length - 1) {
+                currentStep++;
+                updateUI();
+            }
+        }
+
+        function prevStep() {
+            if (currentStep > 0) {
+                currentStep--;
+                updateUI();
+            }
+        }
+
+        function reset() {
+            currentStep = 0;
+            updateUI();
+        }
+
+        // Initialize
+        updateUI();
+    </script>
+</body>
+</html>

@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Board Cover 算法推演</title>
+  
+  <!-- 加载 Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- 加载 React 和 ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- 加载 Babel 以在浏览器中编译 JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-900 h-screen w-screen p-4 flex items-center justify-center overflow-hidden">
+  
+  <div id="root" class="w-full h-full max-w-7xl mx-auto flex"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // 预设 L 形板块的 4 种旋转形态相对坐标
+    const SHAPES = [
+      [[0, 0], [1, 0], [0, 1]],  // ┏
+      [[0, 0], [0, 1], [1, 1]],  // ┓
+      [[0, 0], [1, 0], [1, 1]],  // ┗
+      [[0, 0], [1, 0], [1, -1]]  // ┛
+    ];
+
+    const COLORS = [
+      'bg-slate-200',       // 0: 空白
+      'bg-slate-900',       // 1: 墙壁/黑格
+      'bg-red-500',         // 2+
+      'bg-blue-500',
+      'bg-green-500',
+      'bg-yellow-500',
+      'bg-purple-500',
+      'bg-pink-500',
+      'bg-teal-500',
+      'bg-orange-500',
+      'bg-indigo-500',
+      'bg-rose-500',
+      'bg-cyan-500',
+      'bg-fuchsia-500',
+      'bg-lime-500',
+      'bg-amber-500'
+    ];
+
+    const INITIAL_GRID = [
+      [0, 0, 0, 0, 1],
+      [0, 0, 0, 0, 0],
+      [0, 1, 0, 0, 0],
+      [0, 0, 0, 0, 0]
+    ];
+
+    function BoardCoverVisualizer() {
+      const [grid, setGrid] = useState(INITIAL_GRID);
+      const [status, setStatus] = useState('idle'); 
+      const [solutionsCount, setSolutionsCount] = useState(0);
+      const [speed, setSpeed] = useState(50);
+      const [isStepping, setIsStepping] = useState(false);
+      const [logs, setLogs] = useState([]);
+      
+      const statusRef = useRef(status);
+      const speedRef = useRef(speed);
+      const isSteppingRef = useRef(isStepping);
+      const cancelRunRef = useRef(false);
+      const logsEndRef = useRef(null);
+      const stepResolverRef = useRef(null); 
+
+      useEffect(() => { statusRef.current = status; }, [status]);
+      useEffect(() => { speedRef.current = speed; }, [speed]);
+      useEffect(() => { isSteppingRef.current = isStepping; }, [isStepping]);
+      
+      useEffect(() => {
+        if (logsEndRef.current) {
+          logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, [logs]);
+
+      const addLog = (msg, type = 'normal') => {
+        setLogs(prev => [...prev.slice(-199), { msg, type, id: Date.now() + Math.random() }]);
+      };
+
+      const delay = async () => {
+        if (cancelRunRef.current) return;
+        
+        if (isSteppingRef.current) {
+          setStatus('paused');
+          await new Promise(resolve => {
+            stepResolverRef.current = resolve;
+          });
+          setStatus('solving');
+        } else {
+          await new Promise(resolve => setTimeout(resolve, speedRef.current));
+        }
+      };
+
+      const solveBoard = async (currentGrid, colorIndex) => {
+        if (cancelRunRef.current) return 0;
+
+        let targetR = -1;
+        let targetC = -1;
+        let H = currentGrid.length;
+        let W = currentGrid[0].length;
+
+        for (let r = 0; r < H; r++) {
+          for (let c = 0; c < W; c++) {
+            if (currentGrid[r][c] === 0) {
+              targetR = r;
+              targetC = c;
+              break;
+            }
+          }
+          if (targetR !== -1) break;
+        }
+
+        if (targetR === -1) {
+          setSolutionsCount(prev => prev + 1);
+          addLog(`✅ 找到一种有效覆盖方案！当前总计: ${solutionsCount + 1}`, 'success');
+          await delay();
+          return 1;
+        }
+
+        let ways = 0;
+
+        for (let i = 0; i < SHAPES.length; i++) {
+          if (cancelRunRef.current) return 0;
+          
+          const shape = SHAPES[i];
+          let canPlace = true;
+
+          for (let j = 0; j < shape.length; j++) {
+            const nr = targetR + shape[j][0];
+            const nc = targetC + shape[j][1];
+            if (nr < 0 || nr >= H || nc < 0 || nc >= W || currentGrid[nr][nc] !== 0) {
+              canPlace = false;
+              break;
+            }
+          }
+
+          if (canPlace) {
+            const nextGrid = currentGrid.map(row => [...row]);
+            for (let j = 0; j < shape.length; j++) {
+              nextGrid[targetR + shape[j][0]][targetC + shape[j][1]] = colorIndex;
+            }
+            
+            setGrid(nextGrid);
+            addLog(`放置形态 ${i+1} 于 (${targetR}, ${targetC})`);
+            await delay();
+
+            ways += await solveBoard(nextGrid, colorIndex + 1);
+
+            if (cancelRunRef.current) return 0;
+
+            const revertGrid = currentGrid.map(row => [...row]);
+            setGrid(revertGrid);
+            addLog(`撤销 (${targetR}, ${targetC}) 的形态 ${i+1} 进行回溯`, 'warn');
+            await delay();
+          }
+        }
+
+        return ways;
+      };
+
+      const startSolving = async () => {
+        let whiteCount = 0;
+        grid.forEach(row => row.forEach(cell => { if (cell === 0) whiteCount++; }));
+        
+        if (whiteCount % 3 !== 0) {
+          addLog(`错误：当前网格空白区域总数为 ${whiteCount}，无法被 3 整除，不可能有解。`, 'error');
+          return;
+        }
+
+        setStatus('solving');
+        setSolutionsCount(0);
+        setLogs([]);
+        addLog(`🚀 开始执行分治与回溯搜索算法...`, 'success');
+        cancelRunRef.current = false;
+        
+        const cleanGrid = grid.map(row => row.map(cell => cell === 1 ? 1 : 0));
+        setGrid(cleanGrid);
+
+        await solveBoard(cleanGrid, 2);
+
+        if (!cancelRunRef.current) {
+          setStatus('finished');
+          addLog(`🎉 搜索完成！共找到 ${solutionsCount} 种合法覆盖方案。`, 'success');
+        }
+      };
+
+      const handleNextStep = () => {
+        if (stepResolverRef.current) {
+          stepResolverRef.current();
+          stepResolverRef.current = null;
+        }
+      };
+
+      const toggleStepping = () => {
+        setIsStepping(prev => {
+          const nextVal = !prev;
+          if (!nextVal && stepResolverRef.current) {
+            stepResolverRef.current();
+            stepResolverRef.current = null;
+          }
+          return nextVal;
+        });
+      };
+
+      const handleStop = () => {
+        cancelRunRef.current = true;
+        if (stepResolverRef.current) {
+          stepResolverRef.current();
+          stepResolverRef.current = null;
+        }
+        setStatus('idle');
+        addLog('🛑 用户已手动终止推演。', 'warn');
+      };
+
+      const handleReset = () => {
+        cancelRunRef.current = true;
+        if (stepResolverRef.current) {
+          stepResolverRef.current(); 
+          stepResolverRef.current = null;
+        }
+        setStatus('idle');
+        setSolutionsCount(0);
+        setLogs([]);
+        setGrid(grid.map(row => row.map(cell => cell === 1 ? 1 : 0)));
+      };
+
+      const handleCellClick = (r, c) => {
+        if (status !== 'idle') return;
+        const newGrid = grid.map(row => [...row]);
+        newGrid[r][c] = newGrid[r][c] === 1 ? 0 : 1;
+        setGrid(newGrid);
+      };
+
+      const changeGridSize = (deltaRow, deltaCol) => {
+        if (status !== 'idle') return;
+        let newH = Math.max(1, Math.min(8, grid.length + deltaRow));
+        let newW = Math.max(1, Math.min(8, grid[0].length + deltaCol));
+        
+        const newGrid = Array(newH).fill(0).map((_, r) => 
+          Array(newW).fill(0).map((_, c) => {
+            if (r < grid.length && c < grid[0].length) return grid[r][c] === 1 ? 1 : 0;
+            return 0;
+          })
+        );
+        setGrid(newGrid);
+      };
+
+      return (
+        <div className="flex flex-col h-full w-full bg-slate-950 text-slate-200 rounded-xl font-sans border border-slate-800 shadow-2xl overflow-hidden">
+          
+          {/* 顶部标题区域 */}
+          <div className="bg-slate-900 border-b border-slate-800 p-4 shrink-0 flex justify-between items-center z-10">
+            <div>
+              <h2 className="text-xl font-bold text-white tracking-wide">Board Cover 算法推演</h2>
+              <p className="text-slate-400 text-xs mt-1">二维空间分治搜索与回溯 (DFS + Backtracking)</p>
+            </div>
+            <div className="flex items-center gap-3 bg-slate-950 p-2 px-4 rounded-lg border border-slate-800">
+              <div className="text-slate-400 text-sm font-medium">找到解的数量:</div>
+              <div className="text-2xl font-mono text-emerald-400 font-bold">{solutionsCount}</div>
+            </div>
+          </div>
+
+          {/* 主工作区 */}
+          <div className="flex flex-col lg:flex-row flex-1 p-4 gap-4 min-h-0 relative">
+            
+            {/* 左侧：可视化网格与控件 */}
+            <div className="flex-1 flex flex-col bg-slate-900/50 rounded-xl border border-slate-800 overflow-hidden relative min-h-[350px]">
+              
+              <div className="flex-1 flex items-center justify-center relative p-6">
+                {/* 编辑控制栏 */}
+                <div className="absolute top-3 left-3 flex gap-2 z-10">
+                  <button disabled={status !== 'idle'} onClick={() => changeGridSize(-1, 0)} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-xs px-2 py-1 rounded border border-slate-600">行 -</button>
+                  <button disabled={status !== 'idle'} onClick={() => changeGridSize(1, 0)} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-xs px-2 py-1 rounded border border-slate-600">行 +</button>
+                  <button disabled={status !== 'idle'} onClick={() => changeGridSize(0, -1)} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-xs px-2 py-1 rounded border border-slate-600">列 -</button>
+                  <button disabled={status !== 'idle'} onClick={() => changeGridSize(0, 1)} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-xs px-2 py-1 rounded border border-slate-600">列 +</button>
+                </div>
+                {status === 'idle' && <span className="absolute top-3 right-3 text-xs text-amber-400 animate-pulse">提示：点击方格切换黑白格</span>}
+
+                {/* 渲染网格 */}
+                <div className="shadow-2xl p-2 bg-slate-800 rounded-lg shrink-0">
+                  {grid.map((row, rIdx) => (
+                    <div key={rIdx} className="flex">
+                      {row.map((cell, cIdx) => {
+                        const colorClass = COLORS[cell % COLORS.length];
+                        return (
+                          <div 
+                            key={cIdx} 
+                            onClick={() => handleCellClick(rIdx, cIdx)}
+                            className={`
+                              w-10 h-10 sm:w-14 sm:h-14 m-[1px] rounded transition-all duration-200
+                              ${colorClass}
+                              ${status === 'idle' ? 'cursor-pointer hover:ring-2 ring-white/50' : 'cursor-default'}
+                              ${cell === 0 ? 'shadow-inner' : 'border border-slate-950'}
+                            `}
+                          />
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 底部控制面板 */}
+              <div className="bg-slate-900 border-t border-slate-800 p-4 shrink-0">
+                 <div className="flex justify-between items-center mb-3">
+                    <span className="text-sm text-slate-400">动画速度</span>
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={isStepping} 
+                          onChange={toggleStepping}
+                          className="w-4 h-4 rounded bg-slate-800 border-slate-600 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-900"
+                        />
+                        <span className="text-sm text-amber-400 font-medium">单步模式</span>
+                      </label>
+                      <span className="text-sm font-mono text-blue-400 w-12 text-right">{speed}ms</span>
+                    </div>
+                 </div>
+                 <input 
+                    type="range" 
+                    min="0" max="500" step="10"
+                    value={speed}
+                    onChange={(e) => setSpeed(Number(e.target.value))}
+                    className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer mb-4"
+                 />
+
+                 <div className="grid grid-cols-3 gap-2">
+                   {status === 'idle' || status === 'finished' ? (
+                     <button onClick={startSolving} className="col-span-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold py-2 px-4 rounded-lg shadow-lg shadow-blue-900/50 transition-colors">▶ 开始推演</button>
+                   ) : status === 'paused' ? (
+                     <div className="col-span-2 flex gap-2">
+                       <button onClick={handleNextStep} className="flex-1 bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold py-2 px-4 rounded-lg shadow-lg shadow-amber-900/50 transition-colors">⏭ 下一步</button>
+                       <button onClick={handleStop} className="flex-1 bg-rose-600 hover:bg-rose-500 text-white text-sm font-bold py-2 px-4 rounded-lg shadow-lg shadow-rose-900/50 transition-colors">⏹ 停止</button>
+                     </div>
+                   ) : (
+                     <button onClick={handleStop} className="col-span-2 bg-rose-600 hover:bg-rose-500 text-white text-sm font-bold py-2 px-4 rounded-lg shadow-lg shadow-rose-900/50 transition-colors">⏹ 强制停止</button>
+                   )}
+                   <button onClick={handleReset} className="bg-slate-700 hover:bg-slate-600 text-white text-sm font-bold py-2 px-4 rounded-lg transition-colors">↺ 重置</button>
+                 </div>
+              </div>
+            </div>
+
+            {/* 右侧：状态日志输出 */}
+            <div className="w-full lg:w-80 bg-slate-900 rounded-xl border border-slate-800 flex flex-col shrink-0 h-[250px] lg:h-full relative overflow-hidden">
+              <div className="bg-slate-800 p-3 border-b border-slate-700 shrink-0">
+                 <h3 className="text-sm font-bold text-slate-300 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    算法执行日志
+                 </h3>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-3 space-y-1.5 text-xs font-mono absolute top-11 bottom-0 left-0 right-0">
+                {logs.length === 0 && <div className="text-slate-600 italic">系统就绪，等待执行...</div>}
+                
+                {logs.map((log) => {
+                  let textColor = 'text-slate-300';
+                  let bgColor = 'bg-transparent';
+                  if (log.type === 'warn') textColor = 'text-amber-400 opacity-90';
+                  if (log.type === 'success') { textColor = 'text-emerald-400 font-bold'; bgColor = 'bg-emerald-900/20'; }
+                  if (log.type === 'error') { textColor = 'text-rose-400 font-bold'; bgColor = 'bg-rose-900/20'; }
+                  
+                  return (
+                    <div key={log.id} className={`py-1 px-2 rounded ${textColor} ${bgColor}`}>
+                      <span className="opacity-40 mr-2">{'>'}</span>
+                      {log.msg}
+                    </div>
+                  );
+                })}
+                <div ref={logsEndRef} className="h-2" />
+              </div>
+            </div>
+
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<BoardCoverVisualizer />);
+  </script>
+</body>
+</html>

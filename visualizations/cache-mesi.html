@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3 CPU 缓存一致性 (MESI 协议) 演示</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 20px; }
+        
+        /* 动画定义 */
+        .fade-enter { opacity: 0; transform: translateY(10px); }
+        .fade-enter-active { opacity: 1; transform: translateY(0); transition: opacity 300ms, transform 300ms; }
+        .pulse-border { animation: pulseBorder 2s infinite; }
+        @keyframes pulseBorder { 0% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(234, 179, 8, 0); } 100% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0); } }
+        
+        /* 状态颜色体系 (优化高对比度) */
+        .state-M { background-color: #fef08a; color: #854d0e; border-color: #eab308; } /* Modified */
+        .state-E { background-color: #bbf7d0; color: #166534; border-color: #22c55e; } /* Exclusive */
+        .state-S { background-color: #bfdbfe; color: #1e3a8a; border-color: #3b82f6; } /* Shared */
+        .state-I { background-color: #fecaca; color: #991b1b; border-color: #ef4444; } /* Invalid */
+        .state-None { background-color: #f3f4f6; color: #6b7280; border-color: #d1d5db; } /* None */
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // 定义 3 CPU 的 MESI 演示步骤
+        const demoSteps = [
+            {
+                id: 0,
+                title: "初始状态",
+                description: "系统启动。包含三个 CPU 核心 (A, B, C)，共享总线和主存。主存中地址 0x100 处的数据 X 初始值为 10。所有 CPU 的缓存行均为空 (None)。",
+                action: "系统就绪",
+                memoryX: 10,
+                coreA: { state: "None", value: null },
+                coreB: { state: "None", value: null },
+                coreC: { state: "None", value: null },
+                busActivity: "总线空闲",
+                highlight: []
+            },
+            {
+                id: 1,
+                title: "Core A 读取 X",
+                description: "CPU A 需要读取 X。缓存未命中，向总线发送 Read 请求。由于其他核心均未持有该数据，主存直接响应并将 X=10 发给 Core A。Core A 成为该数据的唯一持有者，状态标记为 E (Exclusive，独占)。",
+                action: "Core A 执行: Read X",
+                memoryX: 10,
+                coreA: { state: "E", value: 10 },
+                coreB: { state: "None", value: null },
+                coreC: { state: "None", value: null },
+                busActivity: "Core A 发起 Read，主存响应数据",
+                highlight: ['coreA']
+            },
+            {
+                id: 2,
+                title: "Core B 读取 X",
+                description: "CPU B 也需要读取 X。缓存未命中，向总线发送 Read 请求。Core A 通过总线嗅探 (Snooping) 监听到该请求，发现自己持有该数据。状态随之从独占变为共享。Core A 和 Core B 现在同时持有最新副本，状态均为 S (Shared)。",
+                action: "Core B 执行: Read X",
+                memoryX: 10,
+                coreA: { state: "S", value: 10 },
+                coreB: { state: "S", value: 10 },
+                coreC: { state: "None", value: null },
+                busActivity: "Core B 发起 Read，A 和 B 状态变为 Shared",
+                highlight: ['coreB', 'coreA']
+            },
+            {
+                id: 3,
+                title: "Core C 读取 X",
+                description: "CPU C 同样要读取 X。发出 Read 请求后，Core A 和 B 都会监听到。此时数据由主存（或某一个处于 S 状态的缓存）提供。现在三个核心都缓存了 X=10，三者的状态皆为 S (Shared)。系统处于完美的共享读取平衡状态。",
+                action: "Core C 执行: Read X",
+                memoryX: 10,
+                coreA: { state: "S", value: 10 },
+                coreB: { state: "S", value: 10 },
+                coreC: { state: "S", value: 10 },
+                busActivity: "Core C 发起 Read，三个核心全面共享",
+                highlight: ['coreC']
+            },
+            {
+                id: 4,
+                title: "Core A 修改 X 的值",
+                description: "CPU A 决定修改 X 的值为 20。由于当前状态是 S，它不能直接修改。它必须向总线广播一个 Invalidate (作废) 信号。Core B 和 C 收到信号，立即将其本地缓存标记为 I (Invalid，无效)。Core A 随后修改数据，状态跃升为 M (Modified)。此时主存的数据 (10) 已过期。",
+                action: "Core A 执行: Write X = 20",
+                memoryX: 10, // 主存依然是脏数据
+                coreA: { state: "M", value: 20 },
+                coreB: { state: "I", value: 10 }, 
+                coreC: { state: "I", value: 10 },
+                busActivity: "Core A 广播 Invalidate 信号！B 和 C 缓存作废",
+                highlight: ['coreA']
+            },
+            {
+                id: 5,
+                title: "Core C 重新读取 X",
+                description: "CPU C 再次读取 X，发现其状态为 I (无效)，于是向总线发起 Read 请求。Core A 监听到该请求，发现自己有最新修改的数据 (状态 M)。Core A **必须**拦截主存的响应，将 X=20 刷新回主存，同时提供给 Core C。操作完成后，A 和 C 共同持有最新数据，状态回退为 S (Shared)。Core B 保持 I (无效) 状态不变。",
+                action: "Core C 执行: Read X",
+                memoryX: 20, // 数据被写回主存
+                coreA: { state: "S", value: 20 },
+                coreB: { state: "I", value: 10 },
+                coreC: { state: "S", value: 20 },
+                busActivity: "Core A 拦截请求，写回主存 20，并共享给 Core C",
+                highlight: ['coreC', 'coreA', 'memory']
+            }
+        ];
+
+        // MESI 状态参考字典
+        const MESIDict = [
+            { s: 'M', name: 'Modified', desc: '数据已修改且唯一，主存数据已过期' },
+            { s: 'E', name: 'Exclusive', desc: '数据唯一且与主存一致' },
+            { s: 'S', name: 'Shared', desc: '数据在多个缓存中存在，与主存一致' },
+            { s: 'I', name: 'Invalid', desc: '数据已作废，不可使用' }
+        ];
+
+        const App = () => {
+            const [currentStepIndex, setCurrentStepIndex] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const timerRef = useRef(null);
+            const step = demoSteps[currentStepIndex];
+
+            useEffect(() => {
+                // 每次渲染后重新初始化 Lucide 图标
+                if (window.lucide) window.lucide.createIcons();
+            });
+
+            useEffect(() => {
+                if (isPlaying) {
+                    timerRef.current = setTimeout(() => {
+                        if (currentStepIndex < demoSteps.length - 1) {
+                            setCurrentStepIndex(prev => prev + 1);
+                        } else {
+                            setIsPlaying(false);
+                        }
+                    }, 4000); // 留出充足的时间给读者阅读
+                }
+                return () => clearTimeout(timerRef.current);
+            }, [isPlaying, currentStepIndex]);
+
+            // CPU 节点组件 (封装结构以保持整洁)
+            const CpuNode = ({ id, name, data, isHighlighted }) => {
+                const isActive = data.state !== "None" && data.state !== "I";
+                const isInvalid = data.state === "I";
+
+                return (
+                    <div className="flex flex-col items-center w-full relative">
+                        {/* CPU 框 */}
+                        <div className={`w-28 h-24 rounded-t-xl flex flex-col items-center justify-center transition-all duration-300 z-10
+                                      ${isHighlighted ? 'bg-slate-700 ring-4 ring-yellow-400 transform -translate-y-2 shadow-xl' : 'bg-slate-800 shadow-md'}`}>
+                            <i data-lucide="cpu" className={`w-8 h-8 mb-1 ${isHighlighted ? 'text-yellow-400' : 'text-slate-400'}`}></i>
+                            <span className="text-white font-bold tracking-wider">{name}</span>
+                        </div>
+                        
+                        {/* 缓存框 */}
+                        <div className={`w-full max-w-[160px] bg-white border-x-2 border-b-2 rounded-b-xl shadow-md p-3 z-10 transition-all
+                                      ${isHighlighted ? 'border-yellow-400 transform -translate-y-2' : 'border-slate-300'}`}>
+                            <div className="text-center text-xs font-mono text-slate-400 mb-2 border-b pb-1">L1 Cache : 0x100</div>
+                            <div className="flex justify-between items-center">
+                                <span className={`w-8 h-8 flex items-center justify-center rounded-lg font-black text-lg border-2 state-${data.state}`}>
+                                    {data.state === 'None' ? '-' : data.state}
+                                </span>
+                                <div className="flex flex-col items-end">
+                                    <span className="text-[10px] text-slate-500 uppercase tracking-wide">Data</span>
+                                    <span className={`font-mono font-bold text-lg ${isInvalid || !isActive ? 'text-slate-300 line-through' : 'text-slate-800'}`}>
+                                        {data.value !== null ? data.value : 'N/A'}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 连接到总线的垂直线 */}
+                        <div className={`w-2 h-10 ${isHighlighted ? 'bg-yellow-400' : 'bg-slate-300'} transition-colors duration-300`}></div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col min-h-[90vh]">
+                    {/* 顶部标题栏 */}
+                    <div className="bg-slate-900 text-white px-8 py-5 flex justify-between items-center border-b-4 border-indigo-500">
+                        <div>
+                            <h1 className="text-2xl font-bold flex items-center">
+                                <i data-lucide="share-2" className="mr-3 text-indigo-400"></i>
+                                多核缓存一致性 (MESI 协议)
+                            </h1>
+                            <p className="text-slate-400 text-sm mt-1">3 CPU 并发场景下的数据读取、广播作废与嗅探写回完整过程</p>
+                        </div>
+                        
+                        {/* MESI 状态图例悬浮板 */}
+                        <div className="hidden lg:flex space-x-2 bg-slate-800 p-2 rounded-lg border border-slate-700">
+                            {MESIDict.map(item => (
+                                <div key={item.s} className={`px-2 py-1 rounded text-xs font-bold border state-${item.s} flex items-center group relative cursor-help`}>
+                                    {item.s} - {item.name}
+                                    {/* Tooltip */}
+                                    <div className="absolute hidden group-hover:block w-48 bg-gray-900 text-white text-[10px] p-2 rounded shadow-xl -bottom-10 right-0 z-50 pointer-events-none">
+                                        {item.desc}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col md:flex-row flex-1">
+                        
+                        {/* ================= 左侧控制台 ================= */}
+                        <div className="w-full md:w-1/3 bg-slate-50 flex flex-col border-r border-slate-200">
+                            
+                            <div className="p-6 flex-1 flex flex-col">
+                                {/* 进度指示器 */}
+                                <div className="mb-6">
+                                    <div className="flex justify-between text-xs font-bold text-slate-400 uppercase mb-2">
+                                        <span>Step {currentStepIndex + 1}</span>
+                                        <span>Total {demoSteps.length}</span>
+                                    </div>
+                                    <div className="flex space-x-1">
+                                        {demoSteps.map((_, idx) => (
+                                            <div key={idx} className={`h-1.5 flex-1 rounded-full transition-all duration-300 
+                                                ${idx === currentStepIndex ? 'bg-indigo-600 scale-y-150' : idx < currentStepIndex ? 'bg-indigo-300' : 'bg-slate-200'}`}>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* 步骤描述区域 */}
+                                <div className="flex-1 bg-white rounded-xl p-5 shadow-sm border border-slate-100 relative overflow-hidden">
+                                    <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500"></div>
+                                    <h2 className="text-xl font-black text-slate-800 mb-2">{step.title}</h2>
+                                    
+                                    <div className="inline-block bg-indigo-50 border border-indigo-100 text-indigo-700 text-sm px-3 py-1.5 rounded-md font-mono font-bold mb-4 shadow-sm">
+                                        <i data-lucide="terminal" className="inline w-4 h-4 mr-2 align-text-bottom"></i>
+                                        {step.action}
+                                    </div>
+                                    
+                                    <p className="text-slate-600 leading-relaxed text-[15px] min-h-[140px]">
+                                        {step.description}
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* 控制按钮区域 */}
+                            <div className="p-6 bg-slate-100 border-t border-slate-200">
+                                <div className="flex space-x-3">
+                                    <button onClick={() => { setIsPlaying(false); setCurrentStepIndex(0); }} 
+                                            className="p-3 bg-white border border-slate-300 hover:bg-slate-50 hover:text-indigo-600 rounded-lg text-slate-600 transition shadow-sm" title="重置到起点">
+                                        <i data-lucide="rotate-ccw" className="w-5 h-5"></i>
+                                    </button>
+                                    
+                                    <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} 
+                                            disabled={currentStepIndex === 0} 
+                                            className="flex-1 p-3 bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 disabled:bg-slate-100 text-slate-700 font-bold rounded-lg transition flex items-center justify-center shadow-sm">
+                                        <i data-lucide="chevron-left" className="w-5 h-5 mr-1"></i>
+                                    </button>
+                                    
+                                    <button onClick={() => {
+                                                if (currentStepIndex === demoSteps.length - 1 && !isPlaying) setCurrentStepIndex(0);
+                                                setIsPlaying(!isPlaying);
+                                            }} 
+                                            className={`flex-[2] p-3 font-bold rounded-lg transition flex items-center justify-center text-white shadow-md
+                                                ${isPlaying ? 'bg-amber-500 hover:bg-amber-600' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
+                                        {isPlaying ? <><i data-lucide="pause" className="w-5 h-5 mr-2"></i> 暂停</> : <><i data-lucide="play" className="w-5 h-5 mr-2"></i> 自动播放</>}
+                                    </button>
+                                    
+                                    <button onClick={() => setCurrentStepIndex(Math.min(demoSteps.length - 1, currentStepIndex + 1))} 
+                                            disabled={currentStepIndex === demoSteps.length - 1} 
+                                            className="flex-1 p-3 bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 disabled:bg-slate-100 text-slate-700 font-bold rounded-lg transition flex items-center justify-center shadow-sm">
+                                        <i data-lucide="chevron-right" className="w-5 h-5 ml-1"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* ================= 右侧可视化区域 (固定布局) ================= */}
+                        <div className="w-full md:w-2/3 p-8 flex flex-col bg-slate-50 relative overflow-hidden">
+                            
+                            {/* 背景网格装饰 */}
+                            <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHBhdGggZD0iTTEgMWgyMHYyMEgxVjF6IiBmaWxsPSJub25lIiBzdHJva2U9IiNlMmU4ZjAiIHN0cm9rZS13aWR0aD0iMC41Ii8+PC9zdmc+')] opacity-50 z-0"></div>
+
+                            {/* 1. CPU & Cache 层 */}
+                            <div className="flex justify-between items-start gap-4 mb-0 relative z-10">
+                                <CpuNode id="A" name="Core A" data={step.coreA} isHighlighted={step.highlight.includes('coreA')} />
+                                <CpuNode id="B" name="Core B" data={step.coreB} isHighlighted={step.highlight.includes('coreB')} />
+                                <CpuNode id="C" name="Core C" data={step.coreC} isHighlighted={step.highlight.includes('coreC')} />
+                            </div>
+
+                            {/* 2. 系统总线层 */}
+                            <div className="relative h-16 w-full flex items-center justify-center z-10 mb-8 mt-0">
+                                {/* 总线主干 */}
+                                <div className="absolute w-full h-6 bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 border-y-2 border-amber-600 shadow-md"></div>
+                                
+                                {/* 总线动画条纹 */}
+                                <div className="absolute w-full h-6 flex overflow-hidden opacity-30 mix-blend-overlay">
+                                    <div className="w-[200%] h-full bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHBhdGggZD0iTTAgNDBsNDAtNDBIMjBMMCAyMHYyMHpNMzAgMGgxMEwwIDIwbTEwIDIwaDEwTDAgMTB2MTB6IiBmaWxsPSIjMDAwIiBmaWxsLW9wYWNpdHk9IjAuMSIvPjwvc3ZnPg==')] animate-[slide_2s_linear_infinite]"></div>
+                                </div>
+                                <style>{`@keyframes slide { from { transform: translateX(0); } to { transform: translateX(-50%); } }`}</style>
+
+                                {/* 状态信息标签 */}
+                                <div className="z-20 bg-slate-900 text-yellow-400 px-6 py-2 rounded-full text-sm font-black tracking-widest shadow-xl border-2 border-yellow-500 flex items-center">
+                                    <i data-lucide="zap" className="w-4 h-4 mr-2"></i> SYSTEM BUS
+                                </div>
+                                
+                                {/* 浮动活动提示 */}
+                                <div className="absolute -top-10 w-full flex justify-center">
+                                     <div key={`bus-${currentStepIndex}`} className="bg-indigo-600 text-white text-xs px-4 py-1.5 rounded-full shadow-lg font-mono flex items-center fade-enter-active z-30 ring-2 ring-white">
+                                        <i data-lucide="radio" className="w-3.5 h-3.5 mr-2 animate-pulse"></i>
+                                        {step.busActivity}
+                                    </div>
+                                </div>
+
+                                {/* 连接到主存的垂直线 */}
+                                <div className={`absolute bottom-0 left-1/2 w-2 h-16 translate-y-full -translate-x-1/2 transition-colors duration-300
+                                               ${step.highlight.includes('memory') ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-slate-300'}`}></div>
+                            </div>
+
+                            {/* 3. 主存层 */}
+                            <div className="flex justify-center mt-auto relative z-10 pb-4">
+                                <div className={`w-2/3 max-w-sm rounded-xl overflow-hidden shadow-2xl transition-all duration-500 border-4
+                                               ${step.highlight.includes('memory') ? 'border-green-500 transform scale-105' : 'border-slate-400'}`}>
+                                    
+                                    {/* 内存条顶部触点装饰 */}
+                                    <div className="h-3 bg-yellow-500 flex justify-around items-center px-2 border-b border-yellow-600">
+                                        {[...Array(20)].map((_, i) => <div key={i} className="w-1 h-2 bg-yellow-300 rounded-sm"></div>)}
+                                    </div>
+                                    
+                                    <div className="bg-slate-800 p-5 text-center relative">
+                                        <i data-lucide="database" className="absolute top-4 left-4 text-slate-600 w-6 h-6"></i>
+                                        <h3 className="font-black text-white mb-4 tracking-[0.2em] uppercase">Main Memory</h3>
+                                        
+                                        <div className="bg-slate-900 border border-slate-700 p-4 rounded-lg flex justify-between items-center relative overflow-hidden">
+                                            {/* 背景发光效果 (当数据变化时) */}
+                                            {step.highlight.includes('memory') && <div className="absolute inset-0 bg-green-500 opacity-20 animate-pulse"></div>}
+                                            
+                                            <div className="text-left relative z-10">
+                                                <div className="text-slate-500 text-[10px] font-mono uppercase tracking-wider mb-1">Physical Address</div>
+                                                <div className="text-slate-300 font-mono font-bold">0x100</div>
+                                            </div>
+                                            
+                                            <div className="text-right flex items-center relative z-10">
+                                                <span className="text-slate-400 text-sm mr-3 font-mono">Value (X)</span>
+                                                <span className={`text-2xl font-black px-4 py-1.5 rounded-md transition-colors duration-500 
+                                                               ${step.highlight.includes('memory') ? 'bg-green-500 text-white shadow-lg' : 'bg-slate-700 text-slate-100'}`}>
+                                                    {step.memoryX}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

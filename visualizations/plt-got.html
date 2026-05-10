@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ELF PLT/GOT 延迟绑定与动态链接可视化</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+SC:wght@400;500;700&display=swap');
+        
+        body { 
+            font-family: 'Noto Sans SC', sans-serif; 
+            background-color: #0b1120; /* Tailwind slate-950 */
+            color: #f8fafc; 
+        }
+        code, .font-mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        canvas { 
+            background-color: #0f172a; /* Tailwind slate-900 */
+            border-radius: 0.75rem; 
+        }
+        
+        /* 滚动条美化 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        .btn { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+        .btn:hover:not(:disabled) { transform: translateY(-2px); filter: brightness(1.1); }
+        .btn:active:not(:disabled) { transform: translateY(0); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        
+        /* 步骤条高亮效果 */
+        .step-container { transition: all 0.3s ease; }
+        .step-active { 
+            border-left: 4px solid #3b82f6; 
+            background: linear-gradient(90deg, rgba(30,58,138,0.4) 0%, rgba(15,23,42,0) 100%);
+        }
+        .step-inactive { border-left: 4px solid transparent; opacity: 0.5; }
+        
+        /* 代码块样式 */
+        .desc-code { 
+            background-color: #1e293b; 
+            color: #93c5fd; 
+            padding: 0.15rem 0.3rem; 
+            border-radius: 0.25rem; 
+            font-size: 0.85em; 
+            border: 1px solid #334155;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen p-5 overflow-hidden">
+
+    <!-- 顶部标题区 -->
+    <div class="flex-none mb-5 border-b border-slate-800 pb-4">
+        <h1 class="text-2xl font-bold text-slate-100 flex items-center gap-3">
+            <span class="bg-blue-600 text-white px-2 py-0.5 rounded text-sm font-mono">x86_64</span>
+            ELF 动态链接与延迟绑定 (Lazy Binding) 微观解析
+        </h1>
+        <p class="text-slate-400 text-sm mt-2">
+            精确映射真实内存结构，摒弃比喻。明确界定“调用方模块”与“共享库”之间的数据与控制流。
+        </p>
+    </div>
+
+    <div class="flex flex-1 gap-6 overflow-hidden">
+        <!-- 左侧：Canvas 交互区 -->
+        <div class="flex-1 flex flex-col min-w-0">
+            <div class="flex-1 relative rounded-xl overflow-hidden border border-slate-700 shadow-2xl">
+                <canvas id="memoryCanvas" class="absolute inset-0 w-full h-full"></canvas>
+            </div>
+            
+            <!-- 控制台 -->
+            <div class="flex-none mt-5 flex gap-4 items-center bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 backdrop-blur-sm">
+                <div class="flex gap-2">
+                    <button id="btnPrev" class="btn px-4 py-2.5 bg-slate-700 rounded-lg text-white font-medium text-sm border border-slate-600">
+                        ← 上一步
+                    </button>
+                    <button id="btnNext" class="btn px-6 py-2.5 bg-blue-600 rounded-lg text-white font-bold text-sm shadow-[0_0_15px_rgba(37,99,235,0.4)] border border-blue-500">
+                        下一步执行 (Next) →
+                    </button>
+                </div>
+                
+                <div class="w-px h-8 bg-slate-700 mx-1"></div>
+                
+                <div class="flex gap-2">
+                    <button id="btnReset" class="btn px-4 py-2 bg-slate-800 rounded-lg text-slate-300 font-medium text-sm border border-slate-600 hover:text-white">
+                        ⟲ 重置为第一次调用
+                    </button>
+                    <button id="btnSecond" class="btn px-4 py-2 bg-emerald-600 rounded-lg text-white font-medium text-sm shadow-[0_0_15px_rgba(5,150,105,0.4)] border border-emerald-500">
+                        ⚡ 模拟第二次调用
+                    </button>
+                </div>
+
+                <div class="ml-auto flex flex-col items-end text-xs font-mono">
+                    <span class="text-slate-400 mb-1">目标 GOT 表项 (.got.plt) 当前状态:</span>
+                    <span id="gotStatusLabel" class="text-amber-400 font-bold bg-amber-400/10 px-2 py-1 rounded border border-amber-400/20">
+                        [未解析] 存储下一条指令地址
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：执行逻辑解说面板 -->
+        <div class="w-[450px] flex-none bg-slate-900 rounded-xl border border-slate-700 flex flex-col overflow-hidden shadow-2xl">
+            <!-- 面板头部 -->
+            <div class="p-5 bg-slate-800/80 border-b border-slate-700 flex justify-between items-end">
+                <h2 class="text-lg font-bold text-slate-100 tracking-wide">执行逻辑链条</h2>
+                <div id="stepCounter" class="text-xs text-blue-400 font-mono bg-blue-400/10 px-2 py-1 rounded border border-blue-400/20">
+                    Step 1 / 8
+                </div>
+            </div>
+            
+            <!-- 动态说明区 -->
+            <div class="p-2 flex-1 overflow-y-auto" id="descriptionPanel">
+                <!-- 由 JS 动态注入 -->
+            </div>
+            
+            <!-- 2026 语境补充 -->
+            <div class="p-5 bg-slate-950 border-t border-slate-800">
+                <div class="flex items-center gap-2 mb-2">
+                    <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                    <h3 class="text-sm font-bold text-emerald-400">2026 社区主流安全现状</h3>
+                </div>
+                <p class="text-xs text-slate-400 leading-relaxed">
+                    上述视图展示的是经典的 <strong class="text-slate-300">延迟绑定 (Lazy Binding)</strong> 原理。<br>
+                    在现代 Linux 发行版中，编译器默认强制开启 <code class="desc-code text-pink-400 border-pink-400/30">Full RELRO</code>。<br>
+                    在此机制下，动态链接器会在**程序加载阶段 (Load Time)** 预先执行完毕上述 Step 4 到 Step 8 的所有解析与回填操作，随后将 GOT 表所在的内存页设为 <strong class="text-slate-300">只读 (Read-Only)</strong>。这从根本上杜绝了利用 GOT Overwrite 劫持控制流的攻击面，程序运行中的每一次调用均表现为“第二次调用”的直通状态。
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('memoryCanvas');
+        const ctx = canvas.getContext('2d');
+        const descPanel = document.getElementById('descriptionPanel');
+        const stepCounter = document.getElementById('stepCounter');
+        const gotStatusLabel = document.getElementById('gotStatusLabel');
+        
+        const btnNext = document.getElementById('btnNext');
+        const btnPrev = document.getElementById('btnPrev');
+        const btnReset = document.getElementById('btnReset');
+        const btnSecond = document.getElementById('btnSecond');
+
+        let width, height;
+        let currentStep = 0;
+        let isSecondCall = false;
+
+        // --- 内存区块数据结构定义 ---
+        // x, y, w, h 是相对于 Canvas 宽高的百分比
+        const blocks = {
+            caller: { x: 0.04, y: 0.08, w: 0.16, h: 0.16, color: '#334155', titleColor: '#cbd5e1', label: '调用方模块 .text', detail: '执行 call printf@plt\n(位置无关代码)' },
+            plt: { x: 0.28, y: 0.08, w: 0.16, h: 0.28, color: '#1e293b', titleColor: '#94a3b8', label: '调用方模块 .plt', detail: '[printf@plt 桩代码]\n1. jmp *GOT表项\n2. push 模块内重定位索引\n3. jmp PLT0(公共代码)' },
+            got: { x: 0.28, y: 0.52, w: 0.16, h: 0.16, color: '#78350f', titleColor: '#fcd34d', label: '调用方模块 .got.plt', detail: 'printf 目标表项\n(初始状态：指回 PLT)' },
+            resolver: { x: 0.58, y: 0.08, w: 0.16, h: 0.16, color: '#0f766e', titleColor: '#5eead4', label: 'ld.so (动态链接器)', detail: '核心解析函数:\n_dl_runtime_resolve()' },
+            elfData: { x: 0.58, y: 0.35, w: 0.16, h: 0.50, color: '#27272a', titleColor: '#a1a1aa', label: '调用方模块 ELF 元数据', detail: '' },
+            libc: { x: 0.82, y: 0.08, w: 0.14, h: 0.16, color: '#be185d', titleColor: '#f9a8d4', label: 'libc.so 目标共享库', detail: '物理内存区\n真正的 printf 指令' }
+        };
+
+        // ELF 内部数据结构子区块
+        const elfSubBlocks = {
+            rela: { x: 0.59, y: 0.43, w: 0.14, h: 0.10, label: '.rela.plt 节', detail: 'Elf64_Rela 结构体\n[r_offset, r_info]' },
+            dynsym: { x: 0.59, y: 0.58, w: 0.14, h: 0.10, label: '.dynsym 节', detail: 'Elf64_Sym 结构体\n[st_name 偏移量]' },
+            dynstr: { x: 0.59, y: 0.73, w: 0.14, h: 0.10, label: '.dynstr 节', detail: '字符串数据\n"printf\\0"' }
+        };
+
+        // --- 逻辑与文案数据 ---
+        const stepsFirstCall = [
+            {
+                title: "1. 控制流：发起调用",
+                desc: "调用方模块（主程序）的 <code class='desc-code'>.text</code> 段执行 <code class='desc-code'>call printf@plt</code>。由于编译器生成的是位置无关代码 (PIC)，此时并未硬编码真实地址，而是将控制流转移至当前模块自身的 <code class='desc-code'>.plt</code> 段中为 printf 分配的专属代码块。",
+                arrows: [{ from: 'caller', to: 'plt', color: '#ef4444', label: '跳转至 printf@plt', type: 'control' }],
+                highlight: ['caller', 'plt']
+            },
+            {
+                title: "2. 控制流：初次查表",
+                desc: "进入 <code class='desc-code'>.plt</code> 专属代码块，第一条指令执行间接跳转：<code class='desc-code'>jmp *printf@got.plt</code>。此时 CPU 尝试从当前模块的 <code class='desc-code'>.got.plt</code> (全局偏移表) 中读取目标地址。",
+                arrows: [{ from: 'plt', to: 'got', color: '#ef4444', label: '读取 GOT 表项', type: 'control' }],
+                highlight: ['plt', 'got']
+            },
+            {
+                title: "3. 控制流：触发回跳 (延迟绑定生效)",
+                desc: "由于是程序首次调用，当前目标 GOT 表项中存储的并非真实的 libc 地址，而是 <code class='desc-code'>.plt</code> 块中紧接着上一条 <code class='desc-code'>jmp</code> 指令的<b>下一条指令地址</b>。执行流因此立刻被“弹回”到当前 PLT 块内继续向下执行。",
+                arrows: [{ from: 'got', to: 'plt', color: '#ef4444', label: '弹回 PLT 下一条指令', type: 'control' }],
+                highlight: ['got', 'plt']
+            },
+            {
+                title: "4. 数据流与控制流：压入索引并移交链接器",
+                desc: "弹回 PLT 后，执行 <code class='desc-code'>push 0x0</code>（假设值为0），将 printf 在<b>当前模块重定位表 (.rela.plt)</b> 中的专属索引压入栈中，作为标识参数。随后跳转至公共代码块 PLT0，将控制权彻底移交给动态链接器 ld.so 的 <code class='desc-code'>_dl_runtime_resolve</code> 函数。",
+                arrows: [{ from: 'plt', to: 'resolver', color: '#ef4444', label: '带入索引，跳转解析', type: 'control' }],
+                highlight: ['plt', 'resolver']
+            },
+            {
+                title: "5. 数据流寻址：解析重定位表",
+                desc: "链接器核心函数接管后，提取栈上的索引值。通过 <code>基地址 + 索引</code>，精确定位到当前模块 <code class='desc-code'>.rela.plt</code> 节中的 <code class='desc-code'>Elf64_Rela</code> 结构体。该结构体提供了两项关键数据：<br>1. <code class='desc-code'>r_offset</code>：目标 GOT 表项的内存绝对地址。<br>2. <code class='desc-code'>r_info</code>：包含下一步所需的新索引。",
+                arrows: [{ from: 'resolver', to: 'rela', color: '#3b82f6', label: '读取 Elf64_Rela', type: 'data' }],
+                highlight: ['resolver', 'rela']
+            },
+            {
+                title: "6. 数据流寻址：解析动态符号表",
+                desc: "链接器提取 <code class='desc-code'>r_info</code> 字段的高 32 位作为新索引，查询当前模块的动态符号表 <code class='desc-code'>.dynsym</code>。定位到对应的 <code class='desc-code'>Elf64_Sym</code> 结构体后，读取其内部的 <code class='desc-code'>st_name</code> 字段，该字段代表一个相对字节偏移量。",
+                arrows: [{ from: 'rela', to: 'dynsym', color: '#3b82f6', label: '提取 r_info 高位查询', type: 'data' }],
+                highlight: ['rela', 'dynsym']
+            },
+            {
+                title: "7. 数据流寻址：提取目标字符串",
+                desc: "链接器利用获取的 <code class='desc-code'>st_name</code> 字节偏移量，前往当前模块的动态字符串表 <code class='desc-code'>.dynstr</code> 的内存区进行逐字节读取。直到遇到空字符 <code class='desc-code'>\\0</code> 停止，最终成功提取出人类可读的目标字符串：<code class='desc-code text-amber-300'>\"printf\"</code>。",
+                arrows: [{ from: 'dynsym', to: 'dynstr', color: '#3b82f6', label: '按 st_name 偏移读取', type: 'data' }],
+                highlight: ['dynsym', 'dynstr']
+            },
+            {
+                title: "8. 遍历查找与 GOT 覆写",
+                desc: "拿到字符串后，链接器遍历当前进程的 <code class='desc-code'>link_map</code> 共享库链表。在找到 <code class='desc-code'>libc.so</code> 的符号表定义后，计算出真实的物理绝对地址。<br>最后，将此物理地址永久覆写回第 5 步获取的 <code class='desc-code'>r_offset</code> 所指向的 GOT 表项中，并将执行流直接交给真实的 printf 函数。",
+                arrows: [
+                    { from: 'resolver', to: 'libc', color: '#10b981', label: '遍历 link_map 定位', type: 'data' },
+                    { from: 'resolver', to: 'got', color: '#f59e0b', label: '向 r_offset 覆写真实地址', type: 'write' },
+                    { from: 'resolver', to: 'libc', color: '#ef4444', label: '控制权转交真实函数', type: 'control', offset: 25 }
+                ],
+                highlight: ['resolver', 'got', 'libc'],
+                updateGot: '[已解析] 存储 libc.so 绝对地址'
+            }
+        ];
+
+        const stepsSecondCall = [
+            {
+                title: "1. 控制流：再次发起调用",
+                desc: "程序继续运行，再次执行 <code class='desc-code'>call printf@plt</code>。控制流依然首先进入调用方当前模块的 <code class='desc-code'>.plt</code> 段。",
+                arrows: [{ from: 'caller', to: 'plt', color: '#ef4444', label: '跳转至 printf@plt', type: 'control' }],
+                highlight: ['caller', 'plt']
+            },
+            {
+                title: "2. 控制流：直通快车道跨越模块",
+                desc: "PLT 再次执行 <code class='desc-code'>jmp *printf@got.plt</code>。由于在上一次的延迟绑定解析中，目标 GOT 表项已被 ld.so 永久覆写为 libc.so 中 printf 的真实绝对地址。此次跳转将不再发生回跳，而是直接越过边界，精准命中物理内存中的真实指令。动态链接器不再介入，损耗降至零。",
+                arrows: [
+                    { from: 'plt', to: 'got', color: '#ef4444', label: '读取已更新的地址', type: 'control' },
+                    { from: 'got', to: 'libc', color: '#ef4444', label: '跨模块直接执行', type: 'control' }
+                ],
+                highlight: ['plt', 'got', 'libc']
+            }
+        ];
+
+        // --- 核心绘图逻辑 ---
+        function resize() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+            width = rect.width;
+            height = rect.height;
+            draw();
+        }
+
+        window.addEventListener('resize', resize);
+
+        function getBlockRect(id) {
+            let b = blocks[id] || elfSubBlocks[id];
+            return {
+                x: b.x * width,
+                y: b.y * height,
+                w: b.w * width,
+                h: b.h * height
+            };
+        }
+
+        function drawRoundedRect(x, y, w, h, r, bgColor, isHighlighted, titleColor) {
+            ctx.beginPath();
+            ctx.roundRect(x, y, w, h, r);
+            
+            ctx.fillStyle = bgColor;
+            ctx.fill();
+            
+            if (isHighlighted) {
+                ctx.lineWidth = 2.5;
+                ctx.strokeStyle = '#f8fafc'; // slate-50
+                ctx.stroke();
+                
+                // 发光特效
+                ctx.shadowColor = titleColor || '#ffffff';
+                ctx.shadowBlur = 20;
+                ctx.stroke();
+                ctx.shadowBlur = 0; 
+            } else {
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = '#475569'; // slate-600
+                ctx.stroke();
+            }
+        }
+
+        function drawText(text, x, y, font, color, align = 'center', lineHeight = 20) {
+            ctx.font = font;
+            ctx.fillStyle = color;
+            ctx.textAlign = align;
+            ctx.textBaseline = 'middle';
+            const lines = text.split('\n');
+            
+            // 计算总高度以保持垂直居中
+            const totalHeight = lines.length * lineHeight;
+            let startY = y - (totalHeight / 2) + (lineHeight / 2);
+            
+            lines.forEach((line) => {
+                ctx.fillText(line, x, startY);
+                startY += lineHeight;
+            });
+        }
+
+        function drawArrow(x1, y1, x2, y2, color, label, type) {
+            ctx.beginPath();
+            
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            
+            let cx1, cy1, cx2, cy2;
+            
+            if (type === 'data') {
+                ctx.setLineDash([6, 4]); // 虚线表示数据流
+                ctx.globalAlpha = 0.8;
+            } else if (type === 'write') {
+                ctx.setLineDash([]);
+                ctx.lineWidth = 4; // 写入操作加粗
+            } else {
+                ctx.setLineDash([]);
+                ctx.globalAlpha = 1.0;
+            }
+
+            if (Math.abs(dx) > Math.abs(dy)) {
+                cx1 = x1 + dx * 0.5; cy1 = y1;
+                cx2 = x2 - dx * 0.5; cy2 = y2;
+            } else {
+                cx1 = x1; cy1 = y1 + dy * 0.5;
+                cx2 = x2; cy2 = y2 - dy * 0.5;
+            }
+
+            ctx.moveTo(x1, y1);
+            ctx.bezierCurveTo(cx1, cy1, cx2, cy2, x2, y2);
+            
+            ctx.lineWidth = type === 'write' ? 4 : 2.5;
+            ctx.strokeStyle = color;
+            ctx.stroke();
+            
+            ctx.setLineDash([]);
+            ctx.globalAlpha = 1.0;
+
+            // 绘制箭头头部
+            const angle = Math.atan2(y2 - cy2, x2 - cx2);
+            ctx.beginPath();
+            ctx.moveTo(x2, y2);
+            ctx.lineTo(x2 - 14 * Math.cos(angle - Math.PI / 7), y2 - 14 * Math.sin(angle - Math.PI / 7));
+            ctx.lineTo(x2 - 14 * Math.cos(angle + Math.PI / 7), y2 - 14 * Math.sin(angle + Math.PI / 7));
+            ctx.closePath();
+            ctx.fillStyle = color;
+            ctx.fill();
+
+            // 绘制标签文本
+            if (label) {
+                const midX = x1 + (cx1 + cx2)/2 * 0 + dx/2;
+                const midY = y1 + (cy1 + cy2)/2 * 0 + dy/2;
+                
+                ctx.font = 'bold 12px "JetBrains Mono", monospace';
+                const tw = ctx.measureText(label).width;
+                
+                // 文本背景遮罩
+                ctx.fillStyle = '#0f172a'; // slate-900 background
+                ctx.beginPath();
+                ctx.roundRect(midX - tw/2 - 6, midY - 12, tw + 12, 24, 4);
+                ctx.fill();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                
+                drawText(label, midX, midY, 'bold 12px "JetBrains Mono", monospace', '#f8fafc');
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, width, height);
+            
+            const steps = isSecondCall ? stepsSecondCall : stepsFirstCall;
+            const stepData = steps[currentStep];
+            const highlights = stepData.highlight || [];
+
+            // 1. 绘制主要内存大区块
+            for (const [id, b] of Object.entries(blocks)) {
+                const rect = getBlockRect(id);
+                const isHi = highlights.includes(id);
+                
+                // 动态更新 GOT 表颜色和内容
+                let bColor = b.color;
+                let details = b.detail;
+                if (id === 'got') {
+                    if ((!isSecondCall && currentStep === 7) || isSecondCall) {
+                        bColor = '#065f46'; // emerald-800 代表已解析
+                        details = "0x7f8a... (绝对物理地址)\n(指向 libc.so 真实区)";
+                    } else if (!isSecondCall && currentStep < 7) {
+                        details = "jmp [延迟绑定回跳地址]\n(指向自身 .plt 内部)";
+                    }
+                }
+
+                drawRoundedRect(rect.x, rect.y, rect.w, rect.h, 8, bColor, isHi, b.titleColor);
+                
+                // 区块标题
+                drawText(b.label, rect.x + rect.w/2, rect.y + 24, 'bold 15px "Noto Sans SC"', b.titleColor);
+                
+                // 区块内部明细描述
+                if (details) {
+                    drawText(details, rect.x + rect.w/2, rect.y + rect.h/2 + 10, '13px "JetBrains Mono", monospace', '#cbd5e1', 'center', 18);
+                }
+            }
+
+            // 2. 绘制 ELF 结构小子区块 (位于元数据大区内)
+            for (const [id, b] of Object.entries(elfSubBlocks)) {
+                const rect = getBlockRect(id);
+                const isHi = highlights.includes(id);
+                
+                drawRoundedRect(rect.x, rect.y, rect.w, rect.h, 6, '#3f3f46', isHi, '#a1a1aa'); // zinc-700
+                drawText(b.label, rect.x + rect.w/2, rect.y + 16, 'bold 13px "JetBrains Mono"', '#60a5fa'); // blue-400
+                drawText(b.detail, rect.x + rect.w/2, rect.y + rect.h/2 + 6, '11px "JetBrains Mono"', '#d4d4d8', 'center', 16);
+            }
+
+            // 3. 绘制带有流向的箭头连接线
+            if (stepData.arrows) {
+                stepData.arrows.forEach(arr => {
+                    const r1 = getBlockRect(arr.from);
+                    const r2 = getBlockRect(arr.to);
+                    
+                    let x1 = r1.x + r1.w/2;
+                    let y1 = r1.y + r1.h/2;
+                    let x2 = r2.x + r2.w/2;
+                    let y2 = r2.y + r2.h/2;
+
+                    // 智能调整连线的吸附边缘
+                    if (arr.from === 'plt' && arr.to === 'got') { y1 = r1.y + r1.h; y2 = r2.y; }
+                    if (arr.from === 'got' && arr.to === 'plt') { y1 = r1.y; x1 -= 30; y2 = r2.y + r2.h; x2 -= 30; } // 错开重叠线
+                    if (arr.from === 'caller' && arr.to === 'plt') { x1 = r1.x + r1.w; x2 = r2.x; }
+                    if (arr.from === 'resolver' && arr.to === 'rela') { y1 = r1.y + r1.h; y2 = r2.y; }
+                    if (arr.from === 'rela' && arr.to === 'dynsym') { y1 = r1.y + r1.h; y2 = r2.y; }
+                    if (arr.from === 'dynsym' && arr.to === 'dynstr') { y1 = r1.y + r1.h; y2 = r2.y; }
+                    if (arr.from === 'resolver' && arr.to === 'got') { x1 = r1.x; y1 = r1.y + r1.h; x2 = r2.x + r2.w; y2 = r2.y + r2.h/2; }
+                    if (arr.from === 'plt' && arr.to === 'resolver') { x1 = r1.x + r1.w; y1 = r1.y + r1.h/4; x2 = r2.x; y2 = r2.y + r2.h/2; }
+                    if (arr.from === 'got' && arr.to === 'libc') { x1 = r1.x + r1.w; y1 = r1.y + r1.h; x2 = r2.x; y2 = r2.y + r2.h; }
+
+                    if (arr.offset) {
+                        y1 += arr.offset;
+                        y2 += arr.offset;
+                    }
+
+                    drawArrow(x1, y1, x2, y2, arr.color, arr.label, arr.type);
+                });
+            }
+
+            updateUIPanel();
+        }
+
+        // --- UI 面板状态更新 ---
+        function updateUIPanel() {
+            const steps = isSecondCall ? stepsSecondCall : stepsFirstCall;
+            const stepData = steps[currentStep];
+
+            stepCounter.textContent = `阶段: ${isSecondCall ? '直通快车道' : '延迟绑定解析'} - 步骤 ${currentStep + 1}/${steps.length}`;
+            
+            // 构建右侧步骤列表
+            let html = '<div class="px-2 py-1">';
+            steps.forEach((s, idx) => {
+                const isActive = idx === currentStep;
+                html += `
+                    <div class="step-container pl-4 py-3 mb-2 rounded-r-lg ${isActive ? 'step-active' : 'step-inactive'}">
+                        <h3 class="font-bold text-[15px] ${isActive ? 'text-blue-400' : 'text-slate-400'}">${s.title}</h3>
+                        ${isActive ? `<div class="text-sm text-slate-300 mt-2 leading-relaxed font-sans">${s.desc}</div>` : ''}
+                    </div>
+                `;
+            });
+            html += '</div>';
+            descPanel.innerHTML = html;
+
+            // 按钮状态管控
+            btnPrev.disabled = currentStep === 0;
+            btnNext.disabled = currentStep === steps.length - 1;
+
+            // GOT 状态提示管控
+            if (stepData.updateGot || isSecondCall) {
+                gotStatusLabel.textContent = stepData.updateGot || '[已解析] 存储 libc.so 绝对地址';
+                gotStatusLabel.className = 'text-emerald-400 font-bold bg-emerald-400/10 px-2 py-1 rounded border border-emerald-400/20';
+            } else {
+                gotStatusLabel.textContent = '[未解析] 存储下一条指令地址 (指回 PLT)';
+                gotStatusLabel.className = 'text-amber-400 font-bold bg-amber-400/10 px-2 py-1 rounded border border-amber-400/20';
+            }
+        }
+
+        // --- 交互事件绑定 ---
+        btnNext.addEventListener('click', () => {
+            const steps = isSecondCall ? stepsSecondCall : stepsFirstCall;
+            if (currentStep < steps.length - 1) { currentStep++; draw(); }
+        });
+
+        btnPrev.addEventListener('click', () => {
+            if (currentStep > 0) { currentStep--; draw(); }
+        });
+
+        btnReset.addEventListener('click', () => {
+            isSecondCall = false; currentStep = 0; draw();
+        });
+
+        btnSecond.addEventListener('click', () => {
+            isSecondCall = true; currentStep = 0; draw();
+        });
+
+        // 初始启动延时以保证字体加载和容器宽高准确
+        setTimeout(() => { resize(); }, 150);
+
+    </script>
+</body>
+</html>

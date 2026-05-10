@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TSP 回溯算法可视化</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 React 和 ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- 引入 Babel 使得浏览器能解析 JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen p-4 md:p-8 font-sans">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // 固定种子生成固定的复杂地图，方便观察
+        const CITIES = [
+            { id: 0, label: 'A', x: 50, y: 50 },
+            { id: 1, label: 'B', x: 250, y: 80 },
+            { id: 2, label: 'C', x: 350, y: 200 },
+            { id: 3, label: 'D', x: 200, y: 350 },
+            { id: 4, label: 'E', x: 80, y: 280 },
+            { id: 5, label: 'F', x: 150, y: 180 }
+        ];
+
+        const getDist = (c1, c2) => Math.sqrt((c1.x - c2.x)**2 + (c1.y - c2.y)**2);
+
+        // 预计算回溯的所有帧（状态）
+        const generateBacktrackFrames = () => {
+            const frames = [];
+            let bestCost = Infinity;
+            let bestPath = [];
+            const n = CITIES.length;
+
+            const dfs = (currNode, currentPath, currentCost) => {
+                frames.push({
+                    type: 'VISIT',
+                    path: [...currentPath],
+                    cost: currentCost,
+                    bestPath: [...bestPath],
+                    bestCost,
+                    msg: `深入访问节点 ${CITIES[currNode].label}`
+                });
+
+                // 达到叶子节点
+                if (currentPath.length === n) {
+                    const returnCost = getDist(CITIES[currNode], CITIES[0]);
+                    const totalCost = currentCost + returnCost;
+                    const finalPath = [...currentPath, 0];
+                    
+                    frames.push({
+                        type: 'COMPLETE',
+                        path: finalPath,
+                        cost: totalCost,
+                        bestPath: [...bestPath],
+                        bestCost,
+                        msg: `完成一条回路，计算总成本: ${totalCost.toFixed(1)}`
+                    });
+
+                    if (totalCost < bestCost) {
+                        bestCost = totalCost;
+                        bestPath = finalPath;
+                        frames.push({
+                            type: 'NEW_BEST',
+                            path: finalPath,
+                            cost: totalCost,
+                            bestPath: [...bestPath],
+                            bestCost,
+                            msg: `🎉 发现更优路径！更新最优成本为: ${totalCost.toFixed(1)}`
+                        });
+                    }
+                    return;
+                }
+
+                for (let i = 1; i < n; i++) {
+                    if (!currentPath.includes(i)) {
+                        const stepCost = getDist(CITIES[currNode], CITIES[i]);
+                        const nextCost = currentCost + stepCost;
+
+                        // 剪枝判定
+                        if (nextCost >= bestCost) {
+                            frames.push({
+                                type: 'PRUNE',
+                                path: [...currentPath, i],
+                                cost: nextCost,
+                                bestPath: [...bestPath],
+                                bestCost,
+                                msg: `✂️ 剪枝：准备前往 ${CITIES[i].label}，预计成本 ${nextCost.toFixed(1)} >= 历史最优 ${bestCost.toFixed(1)}。停止深入。`
+                            });
+                            continue;
+                        }
+
+                        dfs(i, [...currentPath, i], nextCost);
+                        
+                        frames.push({
+                            type: 'BACKTRACK',
+                            path: [...currentPath],
+                            cost: currentCost,
+                            bestPath: [...bestPath],
+                            bestCost,
+                            msg: `回溯：撤销节点 ${CITIES[i].label}，返回上一层`
+                        });
+                    }
+                }
+            };
+
+            // 从节点0开始
+            dfs(0, [0], 0);
+            
+            frames.push({
+                type: 'FINISH',
+                path: [],
+                cost: 0,
+                bestPath,
+                bestCost,
+                msg: "搜索结束。已遍历完整状态空间树。"
+            });
+
+            return frames;
+        };
+
+        const App = () => {
+            const [frames, setFrames] = useState([]);
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [speed, setSpeed] = useState(200);
+
+            useEffect(() => {
+                const generatedFrames = generateBacktrackFrames();
+                setFrames(generatedFrames);
+            }, []);
+
+            useEffect(() => {
+                let timer;
+                if (isPlaying && currentIndex < frames.length - 1) {
+                    timer = setTimeout(() => {
+                        setCurrentIndex(prev => prev + 1);
+                    }, speed);
+                } else if (currentIndex >= frames.length - 1) {
+                    setIsPlaying(false);
+                }
+                return () => clearTimeout(timer);
+            }, [isPlaying, currentIndex, frames, speed]);
+
+            if (frames.length === 0) return <div className="p-8">正在计算状态空间...</div>;
+
+            const currentFrame = frames[currentIndex];
+            const isFinished = currentIndex === frames.length - 1;
+
+            const handleStepForward = () => {
+                if (currentIndex < frames.length - 1) setCurrentIndex(c => c + 1);
+            };
+
+            const handleStepBackward = () => {
+                if (currentIndex > 0) setCurrentIndex(c => c - 1);
+            };
+
+            const handleReset = () => {
+                setCurrentIndex(0);
+                setIsPlaying(false);
+            };
+
+            // SVG 绘制辅助函数
+            const drawPath = (pathIndices, isBest = false, isPruned = false) => {
+                if (!pathIndices || pathIndices.length < 2) return null;
+                const points = pathIndices.map(i => `${CITIES[i].x},${CITIES[i].y}`).join(' ');
+                return (
+                    <polyline
+                        points={points}
+                        fill="none"
+                        stroke={isBest ? "#22c55e" : (isPruned ? "#ef4444" : "#3b82f6")}
+                        strokeWidth={isBest ? 4 : 2}
+                        strokeDasharray={isPruned ? "5,5" : "none"}
+                        className="transition-all duration-300"
+                    />
+                );
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto">
+                    <header className="mb-6">
+                        <h1 className="text-3xl font-bold text-slate-100 mb-2">TSP 回溯算法可视化 (带剪枝)</h1>
+                        <p className="text-slate-400 text-sm">红线虚线表示触发剪枝（放弃该分支）。绿线为当前发现的最优闭环路径。</p>
+                    </header>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        {/* 左侧：画布 */}
+                        <div className="lg:col-span-2 bg-slate-800 rounded-xl p-4 shadow-xl border border-slate-700">
+                            <svg viewBox="0 0 400 400" className="w-full h-auto bg-slate-900 rounded-lg">
+                                {/* 绘制所有可能的边 (极度微弱) */}
+                                {CITIES.map((c1, i) => 
+                                    CITIES.slice(i + 1).map((c2, j) => (
+                                        <line 
+                                            key={`edge-${c1.id}-${c2.id}`} 
+                                            x1={c1.x} y1={c1.y} 
+                                            x2={c2.x} y2={c2.y} 
+                                            stroke="#334155" strokeWidth="1" opacity="0.3" 
+                                        />
+                                    ))
+                                )}
+
+                                {/* 绘制最优路径 */}
+                                {drawPath(currentFrame.bestPath, true)}
+                                
+                                {/* 绘制当前探索路径 */}
+                                {currentFrame.type !== 'FINISH' && drawPath(currentFrame.path, false, currentFrame.type === 'PRUNE')}
+
+                                {/* 绘制城市节点 */}
+                                {CITIES.map((city, idx) => {
+                                    const isStart = idx === 0;
+                                    const inPath = currentFrame.path?.includes(idx);
+                                    return (
+                                        <g key={city.id} transform={`translate(${city.x}, ${city.y})`}>
+                                            <circle 
+                                                r={inPath ? 12 : 8} 
+                                                fill={isStart ? "#eab308" : (inPath ? "#60a5fa" : "#94a3b8")} 
+                                                className="transition-all duration-300"
+                                            />
+                                            <text 
+                                                y="4" 
+                                                textAnchor="middle" 
+                                                fill="#0f172a" 
+                                                fontSize="12" 
+                                                fontWeight="bold"
+                                            >
+                                                {city.label}
+                                            </text>
+                                        </g>
+                                    );
+                                })}
+                            </svg>
+                        </div>
+
+                        {/* 右侧：控制与状态 */}
+                        <div className="flex flex-col space-y-4">
+                            {/* 控制面板 */}
+                            <div className="bg-slate-800 rounded-xl p-5 shadow-xl border border-slate-700">
+                                <h2 className="text-xl font-semibold mb-4 text-slate-200">控制面板</h2>
+                                <div className="flex flex-wrap gap-2 mb-4">
+                                    <button 
+                                        onClick={() => setIsPlaying(!isPlaying)}
+                                        disabled={isFinished}
+                                        className={`px-4 py-2 rounded font-medium flex-1 ${isPlaying ? 'bg-amber-600 hover:bg-amber-500' : 'bg-blue-600 hover:bg-blue-500'} disabled:opacity-50 text-white`}
+                                    >
+                                        {isPlaying ? '⏸ 暂停' : '▶ 自动播放'}
+                                    </button>
+                                    <button 
+                                        onClick={handleStepBackward} 
+                                        disabled={currentIndex === 0 || isPlaying}
+                                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded disabled:opacity-50 text-white"
+                                    >
+                                        ⏮ 回退
+                                    </button>
+                                    <button 
+                                        onClick={handleStepForward} 
+                                        disabled={isFinished || isPlaying}
+                                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded disabled:opacity-50 text-white"
+                                    >
+                                        步进 ⏭
+                                    </button>
+                                </div>
+                                <div className="flex items-center gap-4 text-sm mb-4">
+                                    <span className="text-slate-400">播放速度:</span>
+                                    <input 
+                                        type="range" min="10" max="800" step="10" 
+                                        value={810 - speed} // 反转视觉，右边更快
+                                        onChange={(e) => setSpeed(810 - parseInt(e.target.value))}
+                                        className="flex-1 accent-blue-500"
+                                    />
+                                </div>
+                                <div className="flex justify-between items-center mt-4 pt-4 border-t border-slate-700">
+                                    <span className="text-slate-400 text-sm">进度: {currentIndex + 1} / {frames.length} 步</span>
+                                    <button onClick={handleReset} className="px-3 py-1 bg-red-900/50 hover:bg-red-800 text-red-200 rounded text-sm">
+                                        重置
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* 状态面板 */}
+                            <div className="bg-slate-800 rounded-xl p-5 shadow-xl border border-slate-700 flex-1 flex flex-col">
+                                <h2 className="text-xl font-semibold mb-4 text-slate-200">当前状态</h2>
+                                
+                                <div className="space-y-4 text-sm flex-1">
+                                    <div className="bg-slate-900 p-3 rounded">
+                                        <div className="text-slate-400 mb-1">正在探索路径:</div>
+                                        <div className="font-mono text-blue-400 font-bold">
+                                            {currentFrame.path && currentFrame.path.length > 0 
+                                                ? currentFrame.path.map(i => CITIES[i].label).join(' → ') 
+                                                : '无'}
+                                        </div>
+                                        <div className="mt-1">
+                                            当前累积成本: <span className="text-white">{currentFrame.cost.toFixed(2)}</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-slate-900 p-3 rounded border border-green-900/30">
+                                        <div className="text-slate-400 mb-1">历史最优解 (剪枝基准):</div>
+                                        <div className="font-mono text-green-400 font-bold">
+                                            {currentFrame.bestPath && currentFrame.bestPath.length > 0 
+                                                ? currentFrame.bestPath.map(i => CITIES[i].label).join(' → ') 
+                                                : '尚未发现闭环'}
+                                        </div>
+                                        <div className="mt-1">
+                                            最低总成本: <span className="text-white">{currentFrame.bestCost === Infinity ? '∞' : currentFrame.bestCost.toFixed(2)}</span>
+                                        </div>
+                                    </div>
+
+                                    <div className={`p-4 rounded mt-4 border ${
+                                        currentFrame.type === 'PRUNE' ? 'bg-red-900/20 border-red-800/50 text-red-200' :
+                                        currentFrame.type === 'NEW_BEST' ? 'bg-green-900/20 border-green-800/50 text-green-200' :
+                                        currentFrame.type === 'BACKTRACK' ? 'bg-amber-900/20 border-amber-800/50 text-amber-200' :
+                                        'bg-blue-900/20 border-blue-800/50 text-blue-200'
+                                    }`}>
+                                        <div className="font-bold mb-1">执行动作:</div>
+                                        <div className="leading-relaxed">{currentFrame.msg}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>硬件缓存架构并行流转 (VIPT/PIPT)</title>
+  
+  <!-- 引入 Tailwind CSS 浏览器运行时 -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- 引入 Lucide 图标库 -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- 预定义一些在 JS 中切换的 Tailwind 组合类名 -->
+  <style>
+    /* 配合 Tailwind 使用的自定义动画过渡 */
+    .node-active {
+      @apply ring-4 ring-blue-500 shadow-lg shadow-blue-500/50 scale-105 opacity-100;
+    }
+    .node-inactive {
+      @apply opacity-60 scale-100 ring-0 shadow-none;
+    }
+    .path-active {
+      @apply bg-blue-500 h-full;
+    }
+    .path-inactive {
+      @apply bg-gray-300 h-0;
+    }
+    /* 隐藏类，用于控制 Miss 场景专属节点的显示 */
+    .display-none {
+      display: none !important;
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans p-6 h-screen flex flex-col m-0 overflow-hidden">
+
+  <!-- 头部控制栏 -->
+  <div class="flex justify-between items-center mb-6 bg-slate-800 p-4 rounded-xl border border-slate-700 shrink-0">
+    <div>
+      <h1 class="text-2xl font-bold flex items-center gap-2">
+        <i data-lucide="cpu" class="text-blue-400"></i> 硬件缓存架构并行流转 (VIPT/PIPT)
+      </h1>
+      <p class="text-slate-400 text-sm mt-1">微观时钟周期级动态可视化推演</p>
+    </div>
+    <div class="flex gap-4 items-center">
+      <div class="flex items-center gap-2 mr-4 bg-slate-900 p-2 rounded-lg border border-slate-700">
+        <span class="text-sm text-slate-400">场景模拟:</span>
+        <select id="select-scenario" class="bg-slate-800 text-white text-sm rounded px-2 py-1 outline-none border border-slate-600">
+          <option value="hit">L1 Cache 命中 (Hit)</option>
+          <option value="miss">L1 Cache 未命中 (Miss)</option>
+        </select>
+      </div>
+      
+      <button id="btn-play" class="flex items-center gap-1 bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
+        <span id="icon-play" class="flex items-center gap-1"><i data-lucide="play" class="w-4 h-4"></i> 自动播放</span>
+        <span id="icon-pause" class="flex items-center gap-1 hidden"><i data-lucide="pause" class="w-4 h-4"></i> 暂停</span>
+      </button>
+      
+      <button id="btn-next" class="flex items-center gap-1 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
+        <i data-lucide="skip-forward" class="w-4 h-4"></i> 下一步
+      </button>
+      
+      <button id="btn-reset" class="flex items-center gap-1 bg-red-600 hover:bg-red-500 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
+        <i data-lucide="rotate-ccw" class="w-4 h-4"></i> 重置
+      </button>
+    </div>
+  </div>
+
+  <div class="flex flex-1 gap-6 overflow-hidden">
+    <!-- 左侧：可视化画布 -->
+    <div class="flex-1 bg-slate-800 rounded-xl border border-slate-700 p-8 flex flex-col items-center justify-start overflow-y-auto relative">
+      
+      <!-- CPU & VA -->
+      <div id="node-cpu" class="w-full max-w-2xl bg-slate-700 border-2 border-slate-600 rounded-xl p-4 flex flex-col items-center z-10 transition-all duration-300 node-inactive">
+        <div class="flex items-center gap-2 mb-2">
+          <i data-lucide="cpu" class="text-emerald-400"></i>
+          <span class="font-bold text-lg">CPU Core</span>
+        </div>
+        <div id="node-va" class="flex w-full bg-slate-900 rounded-lg overflow-hidden border border-slate-600 transition-all duration-300 node-inactive">
+          <div id="va-high" class="flex-1 p-2 text-center border-r border-slate-600 transition-colors">
+            <div class="text-xs text-slate-400">高 36 位 [47:12]</div>
+            <div class="font-mono font-bold text-indigo-300">VPN (虚拟页号)</div>
+          </div>
+          <div id="va-low" class="flex-1 p-2 text-center transition-colors">
+            <div class="text-xs text-slate-400">低 12 位 [11:0]</div>
+            <div class="font-mono font-bold text-teal-300">Offset (页内偏移)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 下行连线 (VA -> 并行区域) -->
+      <div class="flex w-full max-w-2xl h-12 relative">
+        <div class="absolute left-1/4 w-0.5 h-full bg-gray-700">
+          <div id="path-va-left" class="transition-all duration-500 w-full bg-blue-500" style="height: 0%;"></div>
+        </div>
+        <div class="absolute right-1/4 w-0.5 h-full bg-gray-700">
+          <div id="path-va-right" class="transition-all duration-500 w-full bg-blue-500" style="height: 0%;"></div>
+        </div>
+        <!-- Index 提取提示 -->
+        <div id="tag-extract" class="absolute right-[15%] top-1/2 -translate-y-1/2 bg-teal-800 text-teal-200 text-xs px-2 py-1 rounded border border-teal-600 font-mono animate-pulse opacity-0 transition-opacity">
+          提取 Index [11:6]
+        </div>
+      </div>
+
+      <!-- VIPT 并行查找区域 (TLB & L1) -->
+      <div class="w-full max-w-3xl flex justify-between gap-8 z-10">
+        <!-- TLB -->
+        <div id="node-tlb" class="flex-1 bg-slate-700 border-2 border-indigo-500/50 rounded-xl p-4 flex flex-col items-center transition-all duration-300 node-inactive">
+          <i data-lucide="database" class="text-indigo-400 mb-2"></i>
+          <div class="font-bold mb-1">TLB 硬件阵列</div>
+          <div class="text-xs text-slate-400 text-center mb-3">地址翻译 (赛道 1)</div>
+          <div id="tlb-output" class="w-full bg-slate-900 p-2 rounded text-center border border-slate-600 font-mono text-sm text-slate-500 transition-colors">
+            等待 VPN 输入...
+          </div>
+        </div>
+
+        <!-- L1 Cache -->
+        <div id="node-l1" class="flex-1 bg-slate-700 border-2 border-teal-500/50 rounded-xl p-4 flex flex-col items-center transition-all duration-300 node-inactive">
+          <i data-lucide="zap" class="text-teal-400 mb-2"></i>
+          <div class="font-bold mb-1">L1 缓存阵列 (SRAM)</div>
+          <div class="text-xs text-slate-400 text-center mb-3">VIPT 数据定位 (赛道 2)</div>
+          <div id="l1-output" class="w-full bg-slate-900 p-2 rounded text-center border border-slate-600 font-mono text-sm text-slate-500 transition-colors">
+            等待 Index 输入...
+          </div>
+        </div>
+      </div>
+
+      <!-- 下行连线至比较器 -->
+      <div class="flex w-full max-w-3xl h-12 relative">
+        <div class="absolute left-[25%] top-0 w-[25%] h-full border-l-2 border-b-2 border-gray-700 rounded-bl-lg overflow-hidden">
+           <div id="path-comp-left-h" class="absolute left-0 bottom-0 w-full h-[2px] bg-indigo-500 transition-all duration-500 opacity-0"></div>
+           <div id="path-comp-left-v" class="absolute top-0 left-[-2px] w-[2px] h-full bg-indigo-500 transition-all duration-500 opacity-0"></div>
+        </div>
+        <div class="absolute right-[25%] top-0 w-[25%] h-full border-r-2 border-b-2 border-gray-700 rounded-br-lg overflow-hidden">
+           <div id="path-comp-right-h" class="absolute right-0 bottom-0 w-full h-[2px] bg-teal-500 transition-all duration-500 opacity-0"></div>
+           <div id="path-comp-right-v" class="absolute top-0 right-[-2px] w-[2px] h-full bg-teal-500 transition-all duration-500 opacity-0"></div>
+        </div>
+      </div>
+
+      <!-- 比较器 -->
+      <div id="node-comparator" class="w-full max-w-sm bg-slate-700 border-2 border-slate-500 rounded-full p-4 flex flex-col items-center z-10 transition-all duration-300 node-inactive relative">
+         <div class="font-bold text-lg">硬件比较器 (Comparator)</div>
+         <div id="comp-result" class="mt-2 font-mono font-bold text-lg hidden">
+           <!-- 内容由 JS 动态插入 -->
+         </div>
+      </div>
+
+      <!-- Hit 场景专属反馈标记 -->
+      <div id="hit-feedback" class="absolute top-[10%] left-[5%] text-green-400 font-bold flex flex-col items-center animate-bounce hidden">
+        <div class="text-sm">输出数据至 CPU</div>
+        <div class="text-2xl">⬆</div>
+      </div>
+
+      <!-- PIPT 路径 (Miss 场景下动态显示) -->
+      <div id="miss-section" class="w-full flex flex-col items-center display-none">
+        <div class="flex w-full max-w-sm h-12 relative justify-center">
+          <div class="w-0.5 h-full bg-red-500"></div>
+        </div>
+
+        <div id="node-pipt" class="w-full max-w-2xl bg-slate-700 border-2 border-amber-500/50 rounded-xl p-4 flex flex-col items-center z-10 transition-all duration-300 node-inactive">
+          <div class="font-bold text-amber-400 flex items-center gap-2"><i data-lucide="database" class="w-4 h-4"></i> PIPT 串行查找阶段</div>
+          <div class="text-sm text-slate-300 mt-2 text-center">
+            硬件将 PPN + Offset 拼接为 <span class="font-mono text-amber-300">48-bit 物理地址 (PA)</span>
+          </div>
+          <div class="w-full mt-3 bg-slate-800 border border-amber-600/50 p-2 text-center rounded">
+            L2 Cache Controller 请求查找...
+          </div>
+        </div>
+
+        <div class="flex w-full max-w-sm h-12 relative justify-center">
+          <div class="w-0.5 h-full bg-amber-600"></div>
+        </div>
+
+        <div id="node-ddr" class="w-full max-w-2xl bg-slate-800 border-2 border-rose-500/50 rounded-xl p-4 flex justify-between items-center z-10 transition-all duration-300 node-inactive">
+           <div class="flex items-center gap-2">
+             <i data-lucide="server" class="text-rose-400"></i>
+             <span class="font-bold text-rose-300">DDR 主存 (Main Memory)</span>
+           </div>
+           <div class="flex items-center gap-2 text-sm">
+              <span class="text-rose-400 font-mono">读取 64B</span>
+              <span class="text-slate-400">→ L3 → L2 → L1 回填</span>
+           </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 右侧：技术描述面板 -->
+    <div class="w-96 bg-slate-800 rounded-xl border border-slate-700 p-6 flex flex-col shrink-0">
+      <h2 class="text-lg font-bold mb-4 border-b border-slate-700 pb-2 text-blue-400">架构状态监控</h2>
+      <div class="flex-1">
+        <div id="desc-container" class="transition-opacity duration-300">
+          <div id="desc-title" class="text-sm font-mono text-blue-300 mb-1"></div>
+          <div id="desc-content" class="text-slate-300 text-sm leading-relaxed bg-slate-900 p-4 rounded-lg border border-slate-700"></div>
+        </div>
+      </div>
+      <div class="mt-4 pt-4 border-t border-slate-700 text-xs text-slate-500 space-y-2">
+        <div><strong>VIPT:</strong> 虚拟索引, 物理标签。无需等待地址翻译即可并行寻址 L1 缓存阵列。</div>
+        <div><strong>PIPT:</strong> 物理索引, 物理标签。L2/L3 缓存的主流方案，解决大容量缓存的别名问题。</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 渲染 Lucide 图标
+    lucide.createIcons();
+
+    // 状态机
+    const state = {
+      step: 0,
+      isPlaying: false,
+      scenario: 'hit', // 'hit' 或 'miss'
+      timer: null
+    };
+
+    // 获取最大步数
+    function getMaxStep() {
+      return state.scenario === 'hit' ? 3 : 5;
+    }
+
+    // --- DOM 节点引用 ---
+    const dom = {
+      selectScenario: document.getElementById('select-scenario'),
+      btnPlay: document.getElementById('btn-play'),
+      iconPlay: document.getElementById('icon-play'),
+      iconPause: document.getElementById('icon-pause'),
+      btnNext: document.getElementById('btn-next'),
+      btnReset: document.getElementById('btn-reset'),
+
+      nodeCpu: document.getElementById('node-cpu'),
+      nodeVa: document.getElementById('node-va'),
+      vaHigh: document.getElementById('va-high'),
+      vaLow: document.getElementById('va-low'),
+      
+      pathVaLeft: document.getElementById('path-va-left'),
+      pathVaRight: document.getElementById('path-va-right'),
+      tagExtract: document.getElementById('tag-extract'),
+
+      nodeTlb: document.getElementById('node-tlb'),
+      tlbOutput: document.getElementById('tlb-output'),
+      nodeL1: document.getElementById('node-l1'),
+      l1Output: document.getElementById('l1-output'),
+
+      pathCompLeftH: document.getElementById('path-comp-left-h'),
+      pathCompLeftV: document.getElementById('path-comp-left-v'),
+      pathCompRightH: document.getElementById('path-comp-right-h'),
+      pathCompRightV: document.getElementById('path-comp-right-v'),
+
+      nodeComparator: document.getElementById('node-comparator'),
+      compResult: document.getElementById('comp-result'),
+      hitFeedback: document.getElementById('hit-feedback'),
+
+      missSection: document.getElementById('miss-section'),
+      nodePipt: document.getElementById('node-pipt'),
+      nodeDdr: document.getElementById('node-ddr'),
+
+      descTitle: document.getElementById('desc-title'),
+      descContent: document.getElementById('desc-content')
+    };
+
+    // --- 数据：各步骤文案字典 ---
+    const getStepDescription = () => {
+      switch (state.step) {
+        case 0:
+          return {
+            title: "时钟周期 T0：生成虚拟地址",
+            content: "CPU 核心发出数据读取指令，生成一条 48-bit 的虚拟地址 (Virtual Address)。此时，该地址尚未被拆分，包含高 36 位的虚拟页号 (VPN) 和低 12 位的页内偏移量 (Offset)。"
+          };
+        case 1:
+          return {
+            title: "时钟周期 T1：硬件级地址拆分",
+            content: "虚拟地址被硬件电路物理切割。高 36 位 (VPN) 准备送入 TLB；低 12 位 (Offset) 中提取出 [11:6] 这 6 个比特位，作为 L1 缓存的索引 (Index)。（[5:0] 这 6 个比特位被称为“行内偏移” (Block Offset / Line Offset)。用于从64字节的Cache Line定位）"
+          };
+        case 2:
+          return {
+            title: "时钟周期 T2：VIPT 绝对并行查找",
+            content: "【赛道 1】TLB 利用 VPN 进行硬件匹配，试图输出 36-bit 的物理页号 (PPN)。\n【赛道 2】L1 缓存直接利用提取的 Index，定位到具体的 SRAM 组 (Set)，并将该组内所有 8 个候选 Cache Line 的物理标签 (Tag) 全部提取出来。这两个过程同时发生。"
+          };
+        case 3:
+          if (state.scenario === 'hit') {
+            return {
+              title: "时钟周期 T3：比较器匹配成功 (L1 Hit)",
+              content: "硬件比较器 (Comparator) 接收到 TLB 输出的标准 PPN，并与 L1 缓存输出的候选 Tag 进行比对。比对成功！L1 缓存直接将对应 Cache Line 的数据输出给 CPU 寄存器。读取完成。"
+            };
+          } else {
+            return {
+              title: "时钟周期 T3：比较器匹配失败 (L1 Miss)",
+              content: "比较器比对发现，L1 缓存输出的所有候选 Tag 中，没有一个与 TLB 提供的 PPN 匹配。宣告 L1 Cache Miss。并行流水线终止，系统必须进入 PIPT 串行查找阶段。"
+            };
+          }
+        case 4:
+          return {
+            title: "时钟周期 T4+：PIPT 串行查找 (L2 Cache)",
+            content: "由于 L1 Miss，硬件将 TLB 提供的 PPN 与原有的 12-bit Offset 拼接，生成完整的 48-bit 物理地址 (PA)。利用该 PA 向 PIPT 架构的 L2 Cache 发起请求。"
+          };
+        case 5:
+          return {
+            title: "时钟周期 Tn：主存读取与层级回填",
+            content: "假设 L2、L3 均 Miss，内存控制器 (Memory Controller) 通过物理地址前往 DDR 主存读取 64 Byte 数据块。数据返回后，依次填充 L3 -> L2 -> L1，最终送达 CPU。"
+          };
+        default:
+          return { title: "", content: "" };
+      }
+    };
+
+    // --- 核心辅助函数：DOM 样式切换 ---
+    const toggleNodeState = (element, isActive) => {
+      if (!element) return;
+      if (isActive) {
+        element.classList.remove('node-inactive');
+        element.classList.add('node-active');
+      } else {
+        element.classList.remove('node-active');
+        element.classList.add('node-inactive');
+      }
+    };
+
+    // --- 核心渲染循环 ---
+    const updateUI = () => {
+      const { step, scenario, isPlaying } = state;
+      const maxStep = getMaxStep();
+
+      // 1. 按钮状态
+      dom.btnNext.disabled = step >= maxStep || isPlaying;
+      if (isPlaying) {
+        dom.iconPlay.classList.add('hidden');
+        dom.iconPause.classList.remove('hidden');
+      } else {
+        dom.iconPlay.classList.remove('hidden');
+        dom.iconPause.classList.add('hidden');
+      }
+
+      // 2. 右侧描述文案
+      const desc = getStepDescription();
+      dom.descTitle.innerText = desc.title;
+      dom.descContent.innerText = desc.content;
+
+      // 3. 硬件节点高亮逻辑
+      // CPU & VA 块始终参与整个过程
+      toggleNodeState(dom.nodeCpu, [0,1,2,3,4,5].includes(step));
+      toggleNodeState(dom.nodeVa, [0,1].includes(step));
+      
+      // VA 内部背景色变化
+      if (step >= 1) {
+        dom.vaHigh.classList.add('bg-indigo-900/50');
+        dom.vaLow.classList.add('bg-teal-900/50');
+      } else {
+        dom.vaHigh.classList.remove('bg-indigo-900/50');
+        dom.vaLow.classList.remove('bg-teal-900/50');
+      }
+
+      // VA 下行连线与提取提示
+      const pathVaHeight = step >= 1 ? '100%' : '0%';
+      dom.pathVaLeft.style.height = pathVaHeight;
+      dom.pathVaRight.style.height = pathVaHeight;
+      dom.tagExtract.style.opacity = step >= 1 ? '1' : '0';
+
+      // TLB 与 L1
+      toggleNodeState(dom.nodeTlb, [2].includes(step));
+      toggleNodeState(dom.nodeL1, [2].includes(step));
+
+      if (step >= 2) {
+        dom.tlbOutput.innerText = "输出 PPN (物理页号)";
+        dom.tlbOutput.className = "w-full bg-slate-900 p-2 rounded text-center border font-mono text-sm transition-colors text-indigo-300 border-indigo-500";
+        dom.l1Output.innerText = "提取候选 Cache Lines & Tags";
+        dom.l1Output.className = "w-full bg-slate-900 p-2 rounded text-center border font-mono text-sm transition-colors text-teal-300 border-teal-500";
+      } else {
+        dom.tlbOutput.innerText = "等待 VPN 输入...";
+        dom.tlbOutput.className = "w-full bg-slate-900 p-2 rounded text-center border font-mono text-sm transition-colors border-slate-600 text-slate-500";
+        dom.l1Output.innerText = "等待 Index 输入...";
+        dom.l1Output.className = "w-full bg-slate-900 p-2 rounded text-center border font-mono text-sm transition-colors border-slate-600 text-slate-500";
+      }
+
+      // 比较器下行连线
+      const compPathOpacity = step >= 3 ? '1' : '0';
+      dom.pathCompLeftH.style.opacity = compPathOpacity;
+      dom.pathCompLeftV.style.opacity = compPathOpacity;
+      dom.pathCompRightH.style.opacity = compPathOpacity;
+      dom.pathCompRightV.style.opacity = compPathOpacity;
+
+      // 比较器自身状态
+      toggleNodeState(dom.nodeComparator, [3].includes(step));
+      // 重置比较器特殊样式
+      dom.nodeComparator.classList.remove('!border-green-500', '!bg-green-900/30', '!border-red-500', '!bg-red-900/30');
+      dom.compResult.classList.add('hidden');
+      dom.compResult.classList.remove('text-green-400', 'text-red-400', 'animate-pulse');
+
+      if (step >= 3) {
+        dom.compResult.classList.remove('hidden');
+        if (scenario === 'hit') {
+           if(step === 3) dom.nodeComparator.classList.add('!border-green-500', '!bg-green-900/30');
+           dom.compResult.innerText = "✓ Tag 匹配成功 (Hit)";
+           dom.compResult.classList.add('text-green-400');
+        } else {
+           if(step === 3) dom.nodeComparator.classList.add('!border-red-500', '!bg-red-900/30');
+           dom.compResult.innerText = "✗ Tag 匹配失败 (Miss)";
+           dom.compResult.classList.add('text-red-400', 'animate-pulse');
+        }
+      }
+
+      // Hit 专属动画
+      if (scenario === 'hit' && step === 3) {
+        dom.hitFeedback.classList.remove('hidden');
+      } else {
+        dom.hitFeedback.classList.add('hidden');
+      }
+
+      // Miss 专属 PIPT 区域显示与状态
+      if (scenario === 'miss' && step >= 4) {
+        dom.missSection.classList.remove('display-none');
+        toggleNodeState(dom.nodePipt, [4].includes(step));
+        toggleNodeState(dom.nodeDdr, [5].includes(step));
+      } else {
+        dom.missSection.classList.add('display-none');
+      }
+    };
+
+    // --- 事件绑定 ---
+    
+    // 自动播放时钟管理器
+    const tick = () => {
+      if (state.step >= getMaxStep()) {
+        state.isPlaying = false;
+        clearInterval(state.timer);
+      } else {
+        state.step++;
+      }
+      updateUI();
+    };
+
+    dom.btnPlay.addEventListener('click', () => {
+      state.isPlaying = !state.isPlaying;
+      if (state.isPlaying) {
+        // 防止播放到底后继续点击播放无响应，重置一下
+        if(state.step >= getMaxStep()) state.step = 0;
+        state.timer = setInterval(tick, 2000);
+      } else {
+        clearInterval(state.timer);
+      }
+      updateUI();
+    });
+
+    dom.btnNext.addEventListener('click', () => {
+      if (state.step < getMaxStep()) {
+        state.step++;
+        updateUI();
+      }
+    });
+
+    dom.btnReset.addEventListener('click', () => {
+      state.step = 0;
+      state.isPlaying = false;
+      clearInterval(state.timer);
+      updateUI();
+    });
+
+    dom.selectScenario.addEventListener('change', (e) => {
+      state.scenario = e.target.value;
+      state.step = 0;
+      state.isPlaying = false;
+      clearInterval(state.timer);
+      updateUI();
+    });
+
+    // --- 初始化首屏渲染 ---
+    updateUI();
+  </script>
+</body>
+</html>
