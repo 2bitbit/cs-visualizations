@@ -1,6 +1,10 @@
 # CS 交互式可视化合集
 
-50 个交互式浏览器演示，覆盖大学计算机科学核心概念。每一步可追溯，每一帧可推演——让抽象概念变得可见。
+> 50 个交互式浏览器演示，覆盖大学计算机科学核心概念。每一步可追溯，每一帧可推演——让抽象概念变得可见。
+
+**[cs-viz.2bitbit.com](https://2bitbit.github.io/cs-visualizations/)**
+
+---
 
 ## 内容
 
@@ -15,14 +19,13 @@ NAT 地址转换、栈溢出 ROP 攻击。
 
 ## 使用
 
-所有可视化均为自包含 HTML 文件，直接在浏览器中打开即可，无需安装、无需后端。
-
-在线访问：**https://2bitbit.github.io/cs-visualizations**
+所有可视化均为自包含 HTML 文件，直接在浏览器中打开即可。无需安装，无需后端。
 
 ## 技术
 
 - 纯前端：HTML + Canvas + React (CDN)
 - 托管：GitHub Pages
+- 由 [2bitbit](https://github.com/2bitbit) 与 [Hermes Agent](https://github.com/nousresearch/hermes-agent) 协作出品
 - AI 辅助生成，人工逐帧审校
 
 ## License
