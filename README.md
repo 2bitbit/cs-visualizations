@@ -25,8 +25,7 @@ NAT 地址转换、栈溢出 ROP 攻击。
 
 - 纯前端：HTML + Canvas + React (CDN)
 - 托管：GitHub Pages
-- 由 [2bitbit](https://github.com/2bitbit) 与 [Hermes Agent](https://github.com/nousresearch/hermes-agent) 协作出品
-- AI 辅助生成，人工逐帧审校
+- 由 [2bitbit](https://github.com/2bitbit) × [Hermes Agent](https://github.com/nousresearch/hermes-agent) 出品
 
 ## License
 
