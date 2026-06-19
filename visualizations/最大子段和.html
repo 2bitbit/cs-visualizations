@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>最大子段和算法交互式教学课件</title>
+  
+  <!-- 引入 Tailwind CSS 带来极其精美的预设主题和控制级样式 -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 引入 Vue 3 核心库，进行稳健、即时、响应式的状态机管理 -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <!-- 引入 FontAwesome 图标，修饰每一个控件与可视化组件 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+    
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .font-code {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    
+    /* 精确聚焦缩放微动画 (Bump Effect) */
+    @keyframes focus-bump {
+      0% { transform: scale(1); }
+      40% { transform: scale(1.16); filter: brightness(1.25); box-shadow: 0 10px 25px -5px rgba(59, 130, 246, 0.4); }
+      100% { transform: scale(1); }
+    }
+    .animate-bump {
+      animation: focus-bump 0.45s cubic-bezier(0.25, 0.8, 0.25, 1);
+    }
+
+    /* 脉冲式循环呼吸光晕 */
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 0.8; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.03); filter: drop-shadow(0 0 8px currentColor); }
+    }
+    .animate-pulse-glow {
+      animation: pulse-glow 2s infinite ease-in-out;
+    }
+
+    /* 优化全局滚动条风格 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen selection:bg-blue-500/30 selection:text-blue-200">
+
+  <div id="app" class="p-4 md:p-8 max-w-7xl mx-auto space-y-6" v-cloak>
+    
+    <!-- 头部横幅与核心算法选择器 -->
+    <header class="flex flex-col lg:flex-row justify-between items-start lg:items-center border-b border-slate-800 pb-6 gap-4">
+      <div>
+        <div class="flex items-center gap-3">
+          <span class="bg-blue-600/10 text-blue-400 border border-blue-500/20 text-xs px-2.5 py-1 rounded-full font-semibold uppercase tracking-wider">交互式算法演示课件</span>
+          <span class="bg-emerald-600/10 text-emerald-400 border border-emerald-500/20 text-xs px-2.5 py-1 rounded-full font-semibold uppercase tracking-wider">免编译一键运行</span>
+        </div>
+        <h1 class="text-3xl font-extrabold text-white tracking-tight mt-2 flex items-center gap-2">
+          <span>最大子序列和问题的多维度剖析</span>
+          <span class="text-slate-500 font-light text-2xl">|</span>
+          <span class="bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent text-xl font-semibold">Maximum Subarray Visualizer</span>
+        </h1>
+        <p class="text-sm text-slate-400 mt-1">
+          本教学课件采用多维度对比教学法，生动地展示了 <b>Kadane's 动态规划</b> 与 <b>Divide &amp; Conquer 分治归并</b> 两种截然不同的求解算法。
+        </p>
+      </div>
+
+      <!-- 算法切换卡，保持固定高宽不抖动 -->
+      <div class="flex bg-slate-900 p-1.5 rounded-xl border border-slate-800 w-full lg:w-auto shadow-xl">
+        <button 
+          @click="switchAlgo('kadane')"
+          :class="['flex-1 lg:flex-none px-6 py-3 rounded-lg text-xs font-bold tracking-wider uppercase transition-all duration-300', algo === 'kadane' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/30' : 'text-slate-400 hover:text-slate-100']"
+        >
+          <i class="fa-solid fa-bolt mr-1.5"></i>Kadane 算法 (DP)
+        </button>
+        <button 
+          @click="switchAlgo('dac')"
+          :class="['flex-1 lg:flex-none px-6 py-3 rounded-lg text-xs font-bold tracking-wider uppercase transition-all duration-300', algo === 'dac' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/30' : 'text-slate-400 hover:text-slate-100']"
+        >
+          <i class="fa-solid fa-diagram-project mr-1.5"></i>分治算法 (Recursion)
+        </button>
+      </div>
+    </header>
+
+    <!-- 测试数据集控制台 -->
+    <section class="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 shadow-2xl relative overflow-hidden backdrop-blur-md">
+      <div class="absolute top-0 right-0 w-64 h-64 bg-blue-500/5 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="flex flex-col lg:flex-row gap-6 items-end justify-between">
+        
+        <!-- 手动输入 -->
+        <div class="w-full lg:w-2/3 space-y-2">
+          <label class="text-xs font-bold text-slate-300 uppercase tracking-widest flex items-center gap-2">
+            <i class="fa-solid fa-keyboard text-slate-500"></i>
+            <span>测试数据集输入 (以英文逗号分隔数字)</span>
+            <span class="text-[10px] text-slate-500 font-normal">(建议包含正负零交替，长度为 4 至 12 之间最佳)</span>
+          </label>
+          <div class="flex gap-2">
+            <input 
+              type="text" 
+              v-model="arrayInput"
+              placeholder="例如: -2, 1, -3, 4, -1, 2, 1, -5, 4"
+              class="bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-xl px-4 py-3 text-sm font-code text-white focus:outline-none focus:ring-2 focus:ring-blue-500/40 w-full transition-all"
+            />
+            <button
+              @click="handleArraySubmit"
+              class="bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-bold px-6 py-3 rounded-xl transition-all shadow-md shrink-0 flex items-center gap-1.5"
+            >
+              <i class="fa-solid fa-circle-check"></i>应用数据
+            </button>
+          </div>
+          <p v-if="inputError" class="text-red-400 text-xs font-code flex items-center gap-1">
+            <i class="fa-solid fa-triangle-exclamation"></i>{{ inputError }}
+          </p>
+        </div>
+
+        <!-- 经典教学数据集预设 -->
+        <div class="w-full lg:w-auto space-y-2 shrink-0">
+          <span class="text-[10px] font-bold text-slate-500 uppercase tracking-widest block flex items-center gap-1.5">
+            <i class="fa-solid fa-graduation-cap"></i>经典教学测试预设
+          </span>
+          <div class="flex flex-wrap gap-2">
+            <button
+              v-for="(preset, index) in ARRAY_PRESETS"
+              :key="index"
+              @click="loadPreset(preset.array)"
+              class="bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white text-xs px-3 py-2 rounded-lg transition-all flex items-center gap-1"
+            >
+              <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+              <span>{{ preset.name }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 双面板排版：左侧状态演示（7格），右侧伪代码与状态透视（5格） -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      
+      <!-- 左面板: 仿真演示沙盒 -->
+      <div class="lg:col-span-7 space-y-6">
+        
+        <!-- 沙盒主背景区：确保高度稳定、杜绝拉扯抖动 -->
+        <div class="bg-slate-900/30 border border-slate-800/80 rounded-2xl p-6 shadow-inner min-h-[460px] flex flex-col justify-between relative">
+          
+          <div class="space-y-6">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+              <span class="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <i class="fa-solid fa-clapperboard text-blue-500"></i>
+                演示画布 (Sandbox Canvas)
+              </span>
+              <span class="text-xs font-code text-slate-500">
+                Array Size: {{ arr.length }}
+              </span>
+            </div>
+
+            <!-- Kadane 算法视图面板 -->
+            <div v-if="algo === 'kadane'" class="space-y-8">
+              <!-- 数值度量仪表盘 -->
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                
+                <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow-sm relative overflow-hidden">
+                  <div class="text-xs text-slate-400 font-medium">当前元素 arr[i]</div>
+                  <div class="text-3xl font-extrabold text-blue-400 mt-2 font-code">
+                    {{ step.idx !== undefined ? arr[step.idx] : '-' }}
+                    <span class="text-xs text-slate-500 font-normal ml-2">i = {{ step.idx }}</span>
+                  </div>
+                  <div class="absolute right-3 bottom-1 opacity-5 font-bold text-5xl select-none text-blue-400 font-code">ARR</div>
+                </div>
+
+                <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow-sm relative overflow-hidden">
+                  <div class="text-xs text-slate-400 font-medium">局部最大和 current_max</div>
+                  <div class="text-3xl font-extrabold text-amber-400 mt-2 font-code">
+                    {{ step.currentMax !== undefined ? step.currentMax : '-' }}
+                  </div>
+                  <div class="absolute right-3 bottom-1 opacity-5 font-bold text-5xl select-none text-amber-400 font-code">LOC</div>
+                </div>
+
+                <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl flex flex-col justify-between shadow-sm relative overflow-hidden">
+                  <div class="text-xs text-slate-400 font-medium">全局最大和 max_so_far</div>
+                  <div class="text-3xl font-extrabold text-emerald-400 mt-2 font-code">
+                    {{ step.maxSoFar !== undefined ? step.maxSoFar : '-' }}
+                    <span class="text-xs text-slate-500 font-normal ml-1" v-if="step.bestStart !== undefined">
+                      [{{ step.bestStart }}, {{ step.bestEnd }}]
+                    </span>
+                  </div>
+                  <div class="absolute right-3 bottom-1 opacity-5 font-bold text-5xl select-none text-emerald-400 font-code">GLO</div>
+                </div>
+
+              </div>
+
+              <!-- 数组动态可视化渲染 -->
+              <div class="bg-slate-950/60 border border-slate-900 p-6 rounded-2xl">
+                <div class="text-[10px] text-slate-500 font-bold uppercase tracking-widest text-center mb-4">
+                  数组内部扫描动态
+                </div>
+                
+                <div class="flex flex-wrap gap-3 justify-center items-center py-4">
+                  <div v-for="(val, i) in arr" :key="'k-' + currentStepIdx + '-' + i" class="flex flex-col items-center">
+                    
+                    <!-- 动态状态样式计算 -->
+                    <div 
+                      :class="[
+                        'w-14 h-14 rounded-xl border-2 flex flex-col justify-center items-center font-code font-bold text-lg transition-all duration-300 relative',
+                        step.idx === i 
+                          ? 'border-blue-500 bg-blue-500/20 text-white shadow-lg animate-bump scale-105' 
+                          : (i >= step.bestStart && i <= step.bestEnd)
+                            ? 'border-emerald-500 bg-emerald-500/20 text-emerald-100 shadow-sm'
+                            : (i >= step.currentStart && i <= step.idx)
+                              ? 'border-amber-500 bg-amber-500/10 text-amber-200'
+                              : 'border-slate-800 bg-slate-900/40 text-slate-500'
+                      ]"
+                    >
+                      <span>{{ val }}</span>
+                      
+                      <!-- 精确浮标指示器：当前元素i -->
+                      <div v-if="step.idx === i" class="absolute -top-7 px-1.5 py-0.5 bg-blue-600 text-[9px] text-white rounded font-bold uppercase tracking-wider shadow">当前 i</div>
+                    </div>
+                    
+                    <span class="text-[10px] text-slate-500 mt-2 font-code">[{{ i }}]</span>
+                  </div>
+                </div>
+
+                <!-- 科学严谨的图例解释系统 -->
+                <div class="flex flex-wrap gap-4 justify-center items-center mt-6 pt-4 border-t border-slate-900 text-xs text-slate-400">
+                  <div class="flex items-center gap-1.5">
+                    <div class="w-3 h-3 bg-blue-500/20 border border-blue-500 rounded"></div>
+                    <span>当前扫描焦点 (i)</span>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <div class="w-3 h-3 bg-amber-500/10 border border-amber-500 rounded"></div>
+                    <span>局部延伸累加段 (current_max 区域)</span>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <div class="w-3 h-3 bg-emerald-500/20 border border-emerald-500 rounded"></div>
+                    <span>全局最大目标区间 (max_so_far)</span>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            <!-- Divide & Conquer (分治) 视图面板 -->
+            <div v-if="algo === 'dac'" class="space-y-6">
+              
+              <!-- 递归层级核心参数监视器 -->
+              <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-xl flex flex-col justify-between">
+                  <span class="text-[10px] text-slate-400 font-medium">当前分析区间 [L, R]</span>
+                  <span class="text-lg font-bold text-white mt-1 font-code">
+                    {{ step.l !== undefined ? `[${step.l}, ${step.r}]` : '-' }}
+                  </span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-xl flex flex-col justify-between">
+                  <span class="text-[10px] text-slate-400 font-medium">中点划分 Mid</span>
+                  <span class="text-lg font-bold text-pink-400 mt-1 font-code">
+                    {{ step.mid !== undefined ? step.mid : '无' }}
+                  </span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-xl flex flex-col justify-between">
+                  <span class="text-[10px] text-slate-400 font-medium">递归深度 Depth</span>
+                  <span class="text-lg font-bold text-purple-400 mt-1 font-code">
+                    {{ step.depth !== undefined ? step.depth : '0' }}
+                  </span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-xl flex flex-col justify-between">
+                  <span class="text-[10px] text-slate-400 font-medium">算法执行阶段</span>
+                  <span class="text-xs font-bold text-amber-500 mt-1 uppercase tracking-wider truncate">
+                    <span v-if="step.phase === 'divide'"><i class="fa-solid fa-arrows-split-up-and-left mr-1"></i>二分区间</span>
+                    <span v-else-if="step.phase === 'base'"><i class="fa-solid fa-anchor mr-1"></i>递归探底</span>
+                    <span v-else-if="step.phase === 'cross_calc'"><i class="fa-solid fa-arrows-left-right mr-1"></i>跨界扫描</span>
+                    <span v-else-if="step.phase === 'cross_done'"><i class="fa-solid fa-compress mr-1"></i>跨越和合并</span>
+                    <span v-else-if="step.phase === 'combine_done'"><i class="fa-solid fa-check-double mr-1"></i>三者最优选</span>
+                    <span v-else-if="step.phase === 'done'"><i class="fa-solid fa-trophy mr-1"></i>全局完成</span>
+                    <span v-else>-</span>
+                  </span>
+                </div>
+              </div>
+
+              <!-- 静态区划分治流物理层 -->
+              <div class="bg-slate-950/60 border border-slate-900 p-6 rounded-2xl relative">
+                <div class="text-[10px] text-slate-500 font-bold uppercase tracking-widest text-center mb-4">
+                  区间递归状态可视化监测
+                </div>
+                
+                <div class="flex flex-wrap gap-2.5 justify-center items-center py-4">
+                  <div v-for="(val, i) in arr" :key="'d-' + currentStepIdx + '-' + i" class="flex flex-col items-center">
+                    
+                    <!-- 动态状态样式计算 (分治逻辑) -->
+                    <div 
+                      :class="[
+                        'w-12 h-12 rounded-lg border-2 flex flex-col justify-center items-center font-code font-bold transition-all duration-300 relative',
+                        
+                        /* 是否处于当前的 cross-sum 跨域最优选覆盖范围 */
+                        (step.phase === 'cross_done' && i >= step.crossLeftBest && i <= step.crossRightBest)
+                          ? 'border-pink-500 bg-pink-500/20 text-pink-100 shadow-md animate-bump scale-105'
+                          
+                          /* 是否是当前的划分中心 */
+                          : i === step.mid
+                            ? 'border-purple-500 bg-purple-500/20 text-purple-200 font-bold'
+                            
+                            /* 是否正在该叶子单元发生触底 */
+                            : (step.phase === 'base' && step.l === i)
+                              ? 'border-amber-500 bg-amber-500/30 text-amber-200 ring-4 ring-amber-500/20 animate-bump'
+                              
+                              /* 是否在当前分治递归所涵盖的区间内部 [L, R] */
+                              : (i >= step.l && i <= step.r)
+                                ? 'border-indigo-500 bg-indigo-500/10 text-indigo-100'
+                                
+                                /* 范围外的透明淡化 */
+                                : 'border-slate-800 bg-slate-900/20 text-slate-600 opacity-30'
+                      ]"
+                    >
+                      <span>{{ val }}</span>
+                      
+                      <!-- 标签标识 -->
+                      <div v-if="i === step.mid" class="absolute -top-6 px-1 bg-purple-600 text-[8px] text-white rounded shadow uppercase">Mid</div>
+                      <div v-if="step.phase === 'base' && step.l === i" class="absolute -top-6 px-1 bg-amber-500 text-[8px] text-slate-950 rounded font-bold shadow uppercase">Base</div>
+                    </div>
+                    
+                    <span class="text-[10px] text-slate-500 mt-2 font-code">[{{ i }}]</span>
+                  </div>
+                </div>
+
+                <!-- 分治状态动态数据报表 -->
+                <div class="mt-4 p-4 bg-slate-950 rounded-xl border border-slate-900">
+                  <h4 class="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-2.5 flex items-center gap-1.5">
+                    <i class="fa-solid fa-chart-line"></i>分治求值决策流水
+                  </h4>
+                  
+                  <div v-if="step.phase === 'cross_done'" class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-code">
+                    <div class="p-2.5 bg-slate-900/50 rounded border border-slate-800">
+                      <div class="text-slate-500 mb-0.5">左半区间最大</div>
+                      <div class="text-base font-bold text-sky-400">{{ step.leftMax }}</div>
+                    </div>
+                    <div class="p-2.5 bg-slate-900/50 rounded border border-slate-800">
+                      <div class="text-slate-500 mb-0.5">右半区间最大</div>
+                      <div class="text-base font-bold text-sky-400">{{ step.rightMax }}</div>
+                    </div>
+                    <div class="p-2.5 bg-pink-950/20 rounded border border-pink-900/50">
+                      <div class="text-pink-400 mb-0.5 font-semibold">跨越中点合并最大</div>
+                      <div class="text-base font-bold text-pink-400">{{ step.crossMax }}</div>
+                    </div>
+                  </div>
+                  
+                  <div v-else-if="step.phase === 'cross_calc'" class="text-xs text-slate-400 font-code flex items-center gap-2">
+                    <i class="fa-solid fa-spinner animate-spin text-amber-500"></i>
+                    <span>正从中点 <span class="text-purple-400 font-bold">{{ step.mid }}</span> 分别向左、向右线性扫描，探寻以连通形式跨越中点的最大连续累积和...</span>
+                  </div>
+                  
+                  <div v-else-if="step.phase === 'combine_done'" class="text-xs font-code space-y-1">
+                    <p class="text-slate-300">完成汇总合并！对上面三个候选解进行决策判定：</p>
+                    <p class="text-emerald-400 font-bold flex items-center gap-1.5">
+                      <i class="fa-solid fa-circle-check"></i>
+                      <span>取最大值 Max({{ step.leftMax }}, {{ step.rightMax }}, {{ step.crossMax }}) = {{ step.bestMax }}</span>
+                    </p>
+                  </div>
+
+                  <div v-else class="text-xs text-slate-500 italic font-code">
+                    <i class="fa-regular fa-folder-open mr-1"></i>暂未进入当前区间的合并合并与归并结算。
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+          </div>
+
+          <!-- 底部控制播放器面板 -->
+          <div class="mt-8 pt-6 border-t border-slate-800/80 flex flex-col sm:flex-row gap-4 items-center justify-between">
+            <div class="flex items-center gap-2">
+              
+              <!-- 重置 -->
+              <button 
+                @click="resetPlayer"
+                class="p-3 bg-slate-900 border border-slate-800 hover:bg-slate-800 active:scale-95 text-slate-300 hover:text-white rounded-xl transition-all shadow-md"
+                title="重新开始 (Reset)"
+              >
+                <i class="fa-solid fa-rotate-left"></i>
+              </button>
+              
+              <!-- 上一步 -->
+              <button 
+                @click="prevStep"
+                :disabled="currentStepIdx === 0"
+                class="p-3 bg-slate-900 border border-slate-800 hover:bg-slate-800 active:scale-95 disabled:opacity-40 disabled:hover:bg-slate-900 disabled:hover:text-slate-500 disabled:scale-100 rounded-xl text-slate-300 hover:text-white transition-all shadow-md"
+                title="上一步 (Prev)"
+              >
+                <i class="fa-solid fa-backward-step"></i>
+              </button>
+
+              <!-- 播放 / 暂停 -->
+              <button 
+                @click="togglePlay"
+                :class="[
+                  'px-6 py-3 rounded-xl font-bold text-xs tracking-wider uppercase flex items-center gap-2 transition-all shadow-lg active:scale-95',
+                  isPlaying ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-900/30' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30'
+                ]"
+              >
+                <span v-if="isPlaying" class="flex items-center gap-1.5">
+                  <i class="fa-solid fa-pause"></i> 暂停
+                </span>
+                <span v-else class="flex items-center gap-1.5">
+                  <i class="fa-solid fa-play"></i> 自动播放
+                </span>
+              </button>
+
+              <!-- 下一步 -->
+              <button 
+                @click="nextStep"
+                :disabled="currentStepIdx === steps.length - 1"
+                class="p-3 bg-slate-900 border border-slate-800 hover:bg-slate-800 active:scale-95 disabled:opacity-40 disabled:hover:bg-slate-900 disabled:hover:text-slate-500 disabled:scale-100 rounded-xl text-slate-300 hover:text-white transition-all shadow-md"
+                title="下一步 (Next)"
+              >
+                <i class="fa-solid fa-forward-step"></i>
+              </button>
+
+            </div>
+
+            <!-- 自动播放速度阻尼器 -->
+            <div class="flex items-center gap-3 w-full sm:w-auto bg-slate-900/40 px-4 py-2 rounded-xl border border-slate-800">
+              <span class="text-xs text-slate-400 font-code whitespace-nowrap">
+                <i class="fa-solid fa-gauge-high mr-1"></i>延时: {{ (playSpeed / 1000).toFixed(1) }}s
+              </span>
+              <input 
+                type="range" 
+                min="400" 
+                max="3000" 
+                step="200"
+                v-model.number="playSpeed"
+                class="w-full sm:w-32 accent-blue-500 h-1 bg-slate-800 rounded-lg cursor-pointer transition-all"
+              />
+            </div>
+          </div>
+
+        </div>
+
+        <!-- 课件步骤描述解说面板 -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 min-h-[140px] flex flex-col justify-between relative shadow-2xl">
+          <div class="absolute top-0 right-0 p-4 opacity-10">
+            <i class="fa-solid fa-quote-right text-4xl text-slate-500"></i>
+          </div>
+          <div>
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+              <span class="text-[10px] bg-slate-800 text-slate-300 px-2.5 py-1 rounded font-code font-bold tracking-wider border border-slate-700/50 shadow-sm">
+                演示步骤: {{ currentStepIdx + 1 }} / {{ steps.length }}
+              </span>
+              <h3 class="text-sm font-extrabold text-blue-400 flex items-center gap-1.5">
+                <i class="fa-solid fa-compass"></i>{{ step.title }}
+              </h3>
+            </div>
+            <!-- 解说词无 LaTeX 无 Markdown，高度白话可理解 -->
+            <p class="text-slate-200 leading-relaxed text-xs">
+              {{ step.desc }}
+            </p>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 右面板: 伪代码追踪与复杂度剖析 -->
+      <div class="lg:col-span-5 space-y-6">
+        
+        <!-- 伪代码执行上下文动态监控器 -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl relative">
+          <div class="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
+            <span class="text-xs font-bold text-slate-300 uppercase tracking-widest flex items-center gap-2">
+              <i class="fa-solid fa-code text-indigo-400"></i>
+              算法伪代码实时追踪 (Interactive Code)
+            </span>
+            <span class="text-[9px] font-code text-emerald-400 font-semibold uppercase tracking-widest bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded shadow-sm">
+              {{ algo === 'kadane' ? 'O(N) 线性阶' : 'O(N log N) 线性对数' }}
+            </span>
+          </div>
+          
+          <!-- 伪代码容器 -->
+          <div class="bg-slate-950 rounded-xl p-3 font-code text-xs overflow-x-auto border border-slate-900">
+            <div v-if="algo === 'kadane'" class="space-y-1">
+              <div 
+                v-for="(code, idx) in KADANE_PSEUDO"
+                :key="idx"
+                :class="[
+                  'py-1 px-3 rounded-md flex items-center transition-all duration-300',
+                  step.codeLine === code.lineNum 
+                    ? 'bg-blue-600/20 border-l-4 border-blue-500 text-white font-bold shadow-inner' 
+                    : 'text-slate-500 opacity-60'
+                ]"
+              >
+                <span class="w-6 text-slate-700 select-none text-[9px] font-bold">{{ code.lineNum }}</span>
+                <pre class="whitespace-pre truncate">{{ code.text }}</pre>
+              </div>
+            </div>
+            
+            <div v-if="algo === 'dac'" class="space-y-1">
+              <div 
+                v-for="(code, idx) in DAC_PSEUDO"
+                :key="idx"
+                :class="[
+                  'py-1 px-3 rounded-md flex items-center transition-all duration-300',
+                  step.codeLine === code.lineNum 
+                    ? 'bg-indigo-600/20 border-l-4 border-indigo-500 text-white font-bold shadow-inner' 
+                    : 'text-slate-500 opacity-60'
+                ]"
+              >
+                <span class="w-6 text-slate-700 select-none text-[9px] font-bold">{{ code.lineNum }}</span>
+                <pre class="whitespace-pre truncate">{{ code.text }}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 教学理论详解与架构思考卡片 -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-2xl relative">
+          <div class="absolute top-0 right-0 p-4 opacity-5">
+            <i class="fa-solid fa-lightbulb text-6xl text-amber-400"></i>
+          </div>
+          
+          <h3 class="text-xs font-bold text-slate-300 uppercase tracking-widest border-b border-slate-800 pb-3 flex items-center gap-1.5">
+            <i class="fa-regular fa-lightbulb text-amber-400 animate-pulse"></i>
+            复杂度及核心思想对比
+          </h3>
+          
+          <div class="space-y-4 text-xs">
+            <div class="grid grid-cols-2 gap-3">
+              <div class="p-3 bg-slate-950 rounded-xl border border-slate-900">
+                <div class="text-[9px] text-slate-500 font-bold uppercase tracking-widest">时间开销 Complexity</div>
+                <div class="text-sm font-bold text-emerald-400 mt-1 font-code">
+                  {{ algo === 'kadane' ? 'O(N)' : 'O(N log N)' }}
+                </div>
+              </div>
+              <div class="p-3 bg-slate-950 rounded-xl border border-slate-900">
+                <div class="text-[9px] text-slate-500 font-bold uppercase tracking-widest">空间占用 Space</div>
+                <div class="text-sm font-bold text-amber-400 mt-1 font-code">
+                  {{ algo === 'kadane' ? 'O(1) 仅需两变量' : 'O(log N) 栈开销' }}
+                </div>
+              </div>
+            </div>
+
+            <!-- 无 LaTeX，清晰纯白话解读 -->
+            <div class="space-y-3 text-slate-400 leading-relaxed">
+              <div v-if="algo === 'kadane'" class="space-y-2">
+                <p>
+                  <strong class="text-blue-400 font-bold">🎯 核心直觉：</strong>
+                  我们在遍历时要随时做一个艰难的选择：“前面的累加和（历史资产）对我当前是否有正向拉动作用？”。
+                </p>
+                <p>
+                  如果前一步累加出来的结果 current_max 已经是负数（或者小于等于 0），那它对于接下来的新序列只能是累赘。因此我们果断抛弃之前的部分，“自立门户”从当前索引重新建立子段。
+                </p>
+                <p class="bg-slate-950 p-3 rounded-lg border border-slate-900/60 text-[11px] text-slate-400 italic">
+                  💡 Kadane 算法极度适用于海量、超大样本的实时流计算，因为它只需单次遍历，对内存完全没有额外负担。
+                </p>
+              </div>
+
+              <div v-else-if="algo === 'dac'" class="space-y-2">
+                <p>
+                  <strong class="text-indigo-400 font-bold">🎯 核心直觉：</strong>
+                  分治思想认为，区间 [L, R] 的最大子段和必然藏在以下三种情况中：
+                </p>
+                <ul class="list-disc list-inside space-y-1 pl-1 text-slate-300">
+                  <li>完全在左半区间：[L, Mid] 的内部最优解。</li>
+                  <li>完全在右半区间：[Mid + 1, R] 的内部最优解。</li>
+                  <li>横跨中点：必然从 Mid 开始向左延伸的极值加上从 Mid+1 开始向右延伸的极值连通合并。</li>
+                </ul>
+                <p class="bg-slate-950 p-3 rounded-lg border border-slate-900/60 text-[11px] text-slate-400 italic">
+                  💡 这种深度优先向下分解，最后在回溯时向上合并（Merge）的逻辑，在并行计算、分布式 MapReduce 框架下更容易拓展。
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- 页脚版权 -->
+    <footer class="text-center text-slate-600 text-xs py-8 border-t border-slate-900">
+      <p>最大子段和 (Maximum Subarray) 算法交互式可视化课件 - 专为深度教学而设计</p>
+    </footer>
+
+  </div>
+
+  <script>
+    // 教学优化专用预设集
+    const ARRAY_PRESETS = [
+      { name: '经典正负混合 (Mixed)', array: [-2, 1, -3, 4, -1, 2, 1, -5, 4] },
+      { name: '纯负值极端测试 (All Negatives)', array: [-8, -3, -2, -4, -10, -5] },
+      { name: '持续单调递增 (All Positives)', array: [1, 2, 3, 4, 5, 6] },
+      { name: '中点两翼扩散 (Alternating Zeroes)', array: [3, -2, 0, 5, -6, 2, 3] }
+    ];
+
+    // Kadane 步骤模拟发生器
+    function generateKadaneSteps(arr) {
+      let steps = [];
+      let maxSoFar = arr[0];
+      let currentMax = arr[0];
+      let bestStart = 0;
+      let bestEnd = 0;
+      let currentStart = 0;
+
+      // 第一步：初始化
+      steps.push({
+        title: "参数初始化阶段",
+        desc: "我们为整个动态规划设定前置参数。当前扫描索引指向 0。将局部最大和 (current_max) 和全局最优记录 (max_so_far) 都设定为首个元素的值：" + arr[0] + "。",
+        idx: 0,
+        currentMax,
+        maxSoFar,
+        bestStart,
+        bestEnd,
+        currentStart,
+        phase: 'init',
+        codeLine: 0
+      });
+
+      for (let i = 1; i < arr.length; i++) {
+        let prevMax = currentMax;
+        let isReset = false;
+        let codeLine = 1;
+
+        // 判断先前的累加和是否具有“拉动价值”
+        if (currentMax <= 0) {
+          currentMax = arr[i];
+          currentStart = i;
+          isReset = true;
+          codeLine = 3;
+          steps.push({
+            title: `索引 [${i}]：前段累赘，自立门户`,
+            desc: `评估元素 ${arr[i]}。因为前一步累积下来的局部最大和为 ${prevMax} (小于或等于 0)，对后续序列有减损。我们当机立断抛弃前面的子段，把新子数组的起点移至当前位置 ${i}。新的局部累加和更新为 ${currentMax}。`,
+            idx: i,
+            currentMax,
+            maxSoFar,
+            bestStart,
+            bestEnd,
+            currentStart,
+            phase: 'calc',
+            isReset,
+            codeLine
+          });
+        } else {
+          currentMax += arr[i];
+          codeLine = 5;
+          steps.push({
+            title: `索引 [${i}]：资产连通，向后延伸`,
+            desc: `评估元素 ${arr[i]}。因为前一步的局部最大和为 ${prevMax} (大于 0)，是有增益的。我们将当前元素 ${arr[i]} 愉快地合并并累加到当前的子段中。局部最大和增加至 ${currentMax}。`,
+            idx: i,
+            currentMax,
+            maxSoFar,
+            bestStart,
+            bestEnd,
+            currentStart,
+            phase: 'calc',
+            isReset,
+            codeLine
+          });
+        }
+
+        // 刷新全局最大和
+        if (currentMax > maxSoFar) {
+          maxSoFar = currentMax;
+          bestStart = currentStart;
+          bestEnd = i;
+          steps.push({
+            title: `索引 [${i}]：突破瓶颈，更新全局最优`,
+            desc: `新高诞生！当前局部最大和 ${currentMax} 击败了旧的全局最大纪录 ${maxSoFar - currentMax + maxSoFar === maxSoFar ? maxSoFar : (maxSoFar - currentMax)}。我们将全局最优子段和修改为 ${maxSoFar}，对应的最强区间更新为自索引 ${bestStart} 起至索引 ${bestEnd} 止。`,
+            idx: i,
+            currentMax,
+            maxSoFar,
+            bestStart,
+            bestEnd,
+            currentStart,
+            phase: 'update',
+            codeLine: 7
+          });
+        }
+      }
+
+      // 最后收尾结算
+      steps.push({
+        title: "算法执行圆满结束",
+        desc: `扫描完毕！我们最终锁定的最强连续区间是 [${bestStart}, ${bestEnd}]。最大连续子段和为 ${maxSoFar}。对应的连续子序列切片为: [${arr.slice(bestStart, bestEnd + 1).join(', ')}]。`,
+        idx: arr.length - 1,
+        currentMax,
+        maxSoFar,
+        bestStart,
+        bestEnd,
+        currentStart,
+        phase: 'done',
+        codeLine: 9,
+        isDone: true
+      });
+
+      return steps;
+    }
+
+    // Divide & Conquer 步骤模拟发生器
+    function generateDACSteps(arr) {
+      let steps = [];
+
+      function solve(l, r, depth) {
+        // 分解行为记录
+        steps.push({
+          title: `向下分解 (当前深度 ${depth})`,
+          desc: `进入分治区间处理 [L=${l}, R=${r}]。我们将对这个局部子阵进行多维度二分探寻，找出其潜在的最大子段和。`,
+          l, r, depth, phase: 'divide', codeLine: 0
+        });
+
+        // 递归最底层边界控制
+        if (l === r) {
+          steps.push({
+            title: `递归触底 (单元回归)`,
+            desc: `当前分析区间 [${l}, ${r}] 内部只有一个孤立元素 ${arr[l]}。无需任何二分，该单元素的局部最大和便是它本身。开始带着当前结果 ${arr[l]} 向上层回溯。`,
+            l, r, depth, phase: 'base', val: arr[l], codeLine: 1
+          });
+          return arr[l];
+        }
+
+        let mid = Math.floor((l + r) / 2);
+        
+        // 深入左半边
+        let leftMax = solve(l, mid, depth + 1);
+        
+        // 深入右半边
+        let rightMax = solve(mid + 1, r, depth + 1);
+
+        // 启动跨越中点的交叉边界分析
+        steps.push({
+          title: `跨中点交叉计算开始`,
+          desc: `左半段最大和 (${leftMax}) 与右半段最大和 (${rightMax}) 已就绪。现在必须寻找必须跨越中点 (Mid = ${mid})，即同时连通索引 ${mid} 和 ${mid+1} 的最大连续子段和。`,
+          l, r, mid, depth, phase: 'cross_calc', codeLine: 5
+        });
+
+        // 计算左翼扩散极大和
+        let leftSum = -Infinity;
+        let currentLeftSum = 0;
+        let crossLeftBest = mid;
+        for (let i = mid; i >= l; i--) {
+          currentLeftSum += arr[i];
+          if (currentLeftSum > leftSum) {
+            leftSum = currentLeftSum;
+            crossLeftBest = i;
+          }
+        }
+
+        // 计算右翼扩散极大和
+        let rightSum = -Infinity;
+        let currentRightSum = 0;
+        let crossRightBest = mid + 1;
+        for (let i = mid + 1; i <= r; i++) {
+          currentRightSum += arr[i];
+          if (currentRightSum > rightSum) {
+            rightSum = currentRightSum;
+            crossRightBest = i;
+          }
+        }
+
+        let crossMax = leftSum + rightSum;
+
+        steps.push({
+          title: `跨中点交叉计算完成`,
+          desc: `向左最大扩散累加至索引 ${crossLeftBest}，最优累积和为 ${leftSum}；向右最大扩散累加至索引 ${crossRightBest}，最优累积和为 ${rightSum}。连通两者，求得跨中点最大的合并和为 ${crossMax}。`,
+          l, r, mid, depth, phase: 'cross_done', 
+          leftMax, rightMax, crossMax,
+          crossLeftBest, crossRightBest, codeLine: 5
+        });
+
+        let bestMax = Math.max(leftMax, rightMax, crossMax);
+
+        // 最终多路归纳
+        steps.push({
+          title: `归纳决策 [L=${l}, R=${r}]`,
+          desc: `汇总并评估当前层面的三个候选最优解：① 完全在左边的最大和 = ${leftMax}；② 完全在右边的最大和 = ${rightMax}；③ 横跨两侧的最大和 = ${crossMax}。取这三者的极值作为本层区间的最终解 = ${bestMax}。`,
+          l, r, mid, depth, phase: 'combine_done',
+          leftMax, rightMax, crossMax, bestMax,
+          crossLeftBest, crossRightBest, codeLine: 6
+        });
+
+        return bestMax;
+      }
+
+      solve(0, arr.length - 1, 0);
+
+      // 全局归口
+      steps.push({
+        title: "全部分治回溯收尾",
+        desc: "所有的二分子区间、回溯交叉计算都已经全面回归。我们成功在最顶层，得出了覆盖全局的最大子序列和！",
+        l: 0, r: arr.length - 1, depth: 0, phase: 'done', isDone: true, codeLine: 6
+      });
+
+      return steps;
+    }
+
+    const { createApp, ref, computed, watch, onUnmounted } = Vue;
+
+    const app = createApp({
+      setup() {
+        const algo = ref('kadane');
+        const arrayInput = ref('-2, 1, -3, 4, -1, 2, 1, -5, 4');
+        const arr = ref([-2, 1, -3, 4, -1, 2, 1, -5, 4]);
+        const inputError = ref('');
+
+        const steps = ref([]);
+        const currentStepIdx = ref(0);
+        const isPlaying = ref(false);
+        const playSpeed = ref(1600); // 默认 1.6 秒每步
+
+        // 伪代码参考资源
+        const KADANE_PSEUDO = [
+          { lineNum: 0, text: "max_so_far = arr[0], current_max = arr[0]" },
+          { lineNum: 1, text: "for i = 1 to arr.length - 1:" },
+          { lineNum: 2, text: "  if current_max <= 0:" },
+          { lineNum: 3, text: "    current_max = arr[i] // 抛弃前序累赘" },
+          { lineNum: 4, text: "  else:" },
+          { lineNum: 5, text: "    current_max += arr[i] // 愉快扩展合并" },
+          { lineNum: 6, text: "  if current_max > max_so_far:" },
+          { lineNum: 7, text: "    max_so_far = current_max" },
+          { lineNum: 8, text: "    best_start = start, best_end = i" },
+          { lineNum: 9, text: "return max_so_far" }
+        ];
+
+        const DAC_PSEUDO = [
+          { lineNum: 0, text: "solve(l, r):" },
+          { lineNum: 1, text: "  if l == r: return arr[l] // 递归叶子触底" },
+          { lineNum: 2, text: "  mid = floor((l + r) / 2)" },
+          { lineNum: 3, text: "  left_max = solve(l, mid) // 深入左半侧探底" },
+          { lineNum: 4, text: "  right_max = solve(mid + 1, r) // 深入右半侧探底" },
+          { lineNum: 5, text: "  cross_max = max_crossing(l, mid, r) // 线性求跨界和" },
+          { lineNum: 6, text: "  return max(left_max, right_max, cross_max) // 合并挑选" }
+        ];
+
+        // 动态计算当前解压步骤
+        const step = computed(() => {
+          return steps.value[currentStepIdx.value] || {};
+        });
+
+        // 核心重新编译生成流
+        const rebuildSteps = () => {
+          if (algo.value === 'kadane') {
+            steps.value = generateKadaneSteps(arr.value);
+          } else {
+            steps.value = generateDACSteps(arr.value);
+          }
+          currentStepIdx.value = 0;
+          isPlaying.value = false;
+        };
+
+        // 算法切换
+        const switchAlgo = (targetAlgo) => {
+          algo.value = targetAlgo;
+          rebuildSteps();
+        };
+
+        // 处理自定义输入提交
+        const handleArraySubmit = () => {
+          try {
+            const parsed = arrayInput.value
+              .split(',')
+              .map(v => v.trim())
+              .filter(v => v !== '')
+              .map(v => {
+                const num = parseInt(v, 10);
+                if (isNaN(num)) throw new Error('元素必须是整数值！');
+                return num;
+              });
+
+            if (parsed.length < 3) {
+              inputError.value = '为了演示效果完整，数组长度请至少包含 3 个元素。';
+              return;
+            }
+            if (parsed.length > 12) {
+              inputError.value = '限制在 12 个元素以内，以保证完美的零错位视效。';
+              return;
+            }
+
+            inputError.value = '';
+            arr.value = parsed;
+            rebuildSteps();
+          } catch (e) {
+            inputError.value = e.message || '数组格式不合法，请使用英文逗号分隔数字。';
+          }
+        };
+
+        // 加载教学推荐预设
+        const loadPreset = (presetArray) => {
+          arrayInput.value = presetArray.join(', ');
+          inputError.value = '';
+          arr.value = [...presetArray];
+          rebuildSteps();
+        };
+
+        // 自动播放时控环
+        let timer = null;
+        const runAutoplay = () => {
+          if (timer) clearTimeout(timer);
+          if (isPlaying.value) {
+            if (currentStepIdx.value < steps.value.length - 1) {
+              timer = setTimeout(() => {
+                currentStepIdx.value++;
+                runAutoplay();
+              }, playSpeed.value);
+            } else {
+              isPlaying.value = false;
+            }
+          }
+        };
+
+        const togglePlay = () => {
+          if (currentStepIdx.value >= steps.value.length - 1) {
+            currentStepIdx.value = 0; // 如果已经到末尾，重新开始播放
+          }
+          isPlaying.value = !isPlaying.value;
+          runAutoplay();
+        };
+
+        // 手工步长调节
+        const nextStep = () => {
+          isPlaying.value = false;
+          currentStepIdx.value = Math.min(steps.value.length - 1, currentStepIdx.value + 1);
+        };
+
+        const prevStep = () => {
+          isPlaying.value = false;
+          currentStepIdx.value = Math.max(0, currentStepIdx.value - 1);
+        };
+
+        const resetPlayer = () => {
+          isPlaying.value = false;
+          currentStepIdx.value = 0;
+        };
+
+        // 观察播放状态与播放速度的变化并实时生效
+        watch(isPlaying, (newVal) => {
+          if (newVal) runAutoplay();
+          else if (timer) clearTimeout(timer);
+        });
+
+        watch(playSpeed, () => {
+          if (isPlaying.value) {
+            runAutoplay();
+          }
+        });
+
+        onUnmounted(() => {
+          if (timer) clearTimeout(timer);
+        });
+
+        // 首次挂载初始化
+        rebuildSteps();
+
+        return {
+          algo,
+          arrayInput,
+          arr,
+          inputError,
+          steps,
+          currentStepIdx,
+          isPlaying,
+          playSpeed,
+          step,
+          ARRAY_PRESETS,
+          KADANE_PSEUDO,
+          DAC_PSEUDO,
+          switchAlgo,
+          handleArraySubmit,
+          loadPreset,
+          togglePlay,
+          nextStep,
+          prevStep,
+          resetPlayer
+        };
+      }
+    });
+
+    app.mount('#app');
+  </script>
+</body>
+</html>

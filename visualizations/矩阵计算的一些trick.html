@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>高性能 GEMM (矩阵乘法) 可视化教学</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background-color: #0f172a; color: #f8fafc; overflow: hidden; }
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const PlayIcon = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>;
+    const PauseIcon = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>;
+    const ResetIcon = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>;
+    const StepBackIcon = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg>;
+    const StepFwdIcon = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>;
+
+    const TABS = [
+      {
+        id: 0,
+        title: "第一阶段：朴素循环机制",
+        maxSteps: 64,
+        Content: () => (
+          <div className="space-y-4 text-slate-300 leading-relaxed text-sm">
+            <h2 className="text-xl font-bold text-white border-b border-slate-700 pb-2">基础矩阵运算：存储与遍历</h2>
+            <p><b className="text-white">背景知识：</b>在计算任务中，真实的瓶颈往往是<span className="text-red-400 font-bold">数据输入输出 (I/O)</span>的速度，而非处理器的运算速度。CPU 计算速度与主存读取速度存在上百倍差距，这被称为“内存墙”。</p>
+            <p><b className="text-white">运行逻辑：</b>右侧展示了标准矩阵乘法 <span className="font-mono text-yellow-400">C = A × B</span> 的底层执行逻辑。它是通过三层嵌套循环实现的。</p>
+            <p>在 C 语言等底层环境中，矩阵是按行优先（Row-major order）连续存储的。观察动画中光标的移动：为了计算 <span className="font-mono text-yellow-400">C[i][j]</span>，我们需要按列遍历 <span className="font-mono text-green-400">B</span>，这会导致内存的非连续访问。</p>
+            <p><b className="text-white">性能影响：</b>主流工程中，通过交换循环顺序（例如将最内层改为连续访问的元素），能够极大提高连续读取的概率，触发 CPU 的硬件预取机制，直接带来数倍的性能提升。</p>
+          </div>
+        )
+      },
+      {
+        id: 1,
+        title: "第二阶段：矩阵分块策略",
+        maxSteps: 8,
+        Content: () => (
+          <div className="space-y-4 text-slate-300 leading-relaxed text-sm">
+            <h2 className="text-xl font-bold text-white border-b border-slate-700 pb-2">突破缓存极限：矩阵分块 (Blocking)</h2>
+            <p><b className="text-white">背景知识：</b>随着矩阵尺寸增大，整个矩阵的数据量将彻底超出 CPU 高速缓存（Cache）的总容量。刚装入缓存的数据还没来得及被再次使用，就被后来的数据覆盖清理了（容量未命中）。</p>
+            <p><b className="text-white">解决逻辑：</b>主流的解决方案是引入分块机制。我们将庞大的矩阵在逻辑上划分为多个能够被缓存完全容纳的子矩阵（Block）。</p>
+            <p>如右侧所示，我们将一个 8×8 的矩阵划分为四个 4×4 的区域。计算 <span className="font-mono text-yellow-400">C</span> 的某个大块，相当于对 <span className="font-mono text-red-400">A</span> 和 <span className="font-mono text-green-400">B</span> 对应的大块进行累加。这成功地将大问题缩减为具有同等结构的小问题。</p>
+            <p><b className="text-white">效果：</b>保证了每一个被划分出的区块在参与计算期间，始终驻留在高速缓存中，大幅削减了向主存请求数据的开销。</p>
+          </div>
+        )
+      },
+      {
+        id: 2,
+        title: "第三阶段：微核与寄存器调度",
+        maxSteps: 16,
+        Content: () => (
+          <div className="space-y-4 text-slate-300 leading-relaxed text-sm">
+            <h2 className="text-xl font-bold text-white border-b border-slate-700 pb-2">榨干算力：微核 (Micro-kernel)</h2>
+            <p><b className="text-white">背景知识：</b>寄存器是 CPU 内部最近、最快的存储介质。现代 CPU 包含 SIMD（单指令多数据流）指令集，能在单一周期内对多个浮点数执行 FMA (乘加) 运算。</p>
+            <p><b className="text-white">微观逻辑：</b>在计算的最内层，微内核不再执行普通的标量乘法，而是执行<b>外积 (Outer Product)</b> 累加（即 Rank-1 Update）。</p>
+            <ul className="list-decimal pl-5 space-y-1 text-xs text-slate-400">
+              <li><b>装载：</b>将 A 的一列和 B 的一行调入向量寄存器。</li>
+              <li><b>广播：</b>利用硬件特性，在数据通道中将标量多点广播。</li>
+              <li><b>FMA：</b>一条指令触发 16 个运算核心，瞬间完成整个 4x4 区域的乘加。</li>
+            </ul>
+            <p><b className="text-white">效果：</b>矩阵 C 的这一小块数据永久驻留在寄存器中，直到完全计算完毕。这种彻底消除中间访存的机制，是达到理论计算峰值的核心钥匙。</p>
+          </div>
+        )
+      },
+      {
+        id: 3,
+        title: "第四阶段：BLIS的5层循环架构",
+        maxSteps: 6,
+        Content: () => (
+          <div className="space-y-4 text-slate-300 leading-relaxed text-sm">
+            <h2 className="text-xl font-bold text-white border-b border-slate-700 pb-2">宏观统筹：5层循环与数据降维</h2>
+            <p><b className="text-white">背景知识：</b>现代高性能矩阵乘法（如 GotoBLAS 和当今的 BLIS 框架）严格定义了围绕微内核的 <b>5 层嵌套循环</b>。</p>
+            <p><b className="text-white">系统级逻辑：</b>每一层循环的目的，都是为了将一块恰好能装入下一级缓存的数据剥离出来，并向下递送：</p>
+            <ul className="list-decimal pl-5 space-y-1 text-xs">
+              <li><b>5th Loop:</b> 沿 n 维度切分，划分出 B 的长条面板。</li>
+              <li><b>4th Loop:</b> 提取 B 的宏面板，并<b>打包进 L3 缓存</b>。</li>
+              <li><b>3rd Loop:</b> 提取 A 的微面板，并<b>打包进 L2 缓存</b>。</li>
+              <li><b>2nd Loop:</b> 从 L3 中提取 B 的微面板进入 <b>L1 缓存池</b>。</li>
+              <li><b>1st Loop:</b> 步进提取 A 和 B 的向量对。</li>
+              <li><b>Micro-kernel:</b> 在 <b>寄存器</b> 内执行高密度的外积运算。</li>
+            </ul>
+            <p><b className="text-white">效果：</b>这 5 层循环完美迎合了 CPU L3->L2->L1->寄存器 的阶梯式容量缩减，使得最内层的计算核心永远处于满载状态。</p>
+          </div>
+        )
+      }
+    ];
+
+    const App = () => {
+      const [activeTab, setActiveTab] = useState(0);
+      const [step, setStep] = useState(0);
+      const [isPlaying, setIsPlaying] = useState(false);
+      const canvasRef = useRef(null);
+
+      const maxSteps = TABS[activeTab].maxSteps;
+
+      useEffect(() => {
+        setStep(0);
+        setIsPlaying(false);
+      }, [activeTab]);
+
+      useEffect(() => {
+        let timer;
+        if (isPlaying) {
+          timer = setInterval(() => {
+            setStep((prev) => {
+              if (prev >= maxSteps - 1) {
+                setIsPlaying(false);
+                return prev;
+              }
+              return prev + 1;
+            });
+          }, activeTab === 2 ? 800 : (activeTab === 3 ? 1200 : (activeTab === 0 ? 150 : 800))); 
+        }
+        return () => clearInterval(timer);
+      }, [isPlaying, activeTab, maxSteps]);
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width;
+        const H = canvas.height;
+        
+        ctx.clearRect(0, 0, W, H);
+
+        const drawMatrix = (x, y, rows, cols, size, title, highlightFn, globalBorder) => {
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.fillStyle = '#1e293b';
+          ctx.fillRect(0, 0, cols * size, rows * size);
+
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              const hl = highlightFn ? highlightFn(r, c) : null;
+              if (hl && hl.color) {
+                ctx.fillStyle = hl.color;
+                ctx.fillRect(c * size, r * size, size, size);
+              }
+              ctx.strokeStyle = '#334155';
+              ctx.lineWidth = 1;
+              ctx.strokeRect(c * size, r * size, size, size);
+
+              if (hl && hl.text) {
+                ctx.fillStyle = '#fff';
+                ctx.font = '12px "Segoe UI", sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(hl.text, c * size + size / 2, r * size + size / 2);
+              }
+            }
+          }
+
+          if (globalBorder) {
+            ctx.strokeStyle = globalBorder;
+            ctx.lineWidth = 3;
+            ctx.strokeRect(0, 0, cols * size, rows * size);
+          }
+
+          ctx.fillStyle = '#cbd5e1';
+          ctx.font = 'bold 18px "Segoe UI", sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(title, (cols * size) / 2, -15);
+          ctx.restore();
+        };
+
+        const drawLine = (x1, y1, x2, y2, color, dashed = false) => {
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          if (dashed) ctx.setLineDash([5, 5]);
+          ctx.stroke();
+          ctx.restore();
+        };
+
+        if (activeTab === 0) {
+          const i = Math.floor(step / 16);
+          const j = Math.floor((step % 16) / 4);
+          const k = step % 4;
+          const cell = 50;
+          
+          drawMatrix(100, 250, 4, 4, cell, "矩阵 A", (r, c) => {
+            if (r === i && c === k) return { color: '#ef4444' };
+            if (r === i) return { color: 'rgba(239, 68, 68, 0.2)' };
+            return null;
+          });
+
+          drawMatrix(400, 20, 4, 4, cell, "矩阵 B", (r, c) => {
+            if (c === j && r === k) return { color: '#22c55e' };
+            if (c === j) return { color: 'rgba(34, 197, 94, 0.2)' };
+            return null;
+          });
+
+          drawMatrix(400, 250, 4, 4, cell, "矩阵 C (目标输出)", (r, c) => {
+            if (r === i && c === j) return { color: 'rgba(250, 204, 21, 0.6)' };
+            return null;
+          });
+
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 22px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(`C[${i}][${j}]  +=  A[${i}][${k}] × B[${k}][${j}]`, W / 2, 500);
+
+          drawLine(100 + k*cell + cell/2, 250 + i*cell + cell/2, 400 + j*cell + cell/2, 250 + i*cell + cell/2, '#ef4444', true);
+          drawLine(400 + j*cell + cell/2, 20 + k*cell + cell/2, 400 + j*cell + cell/2, 250 + i*cell + cell/2, '#22c55e', true);
+        }
+
+        else if (activeTab === 1) {
+          const I = Math.floor(step / 4);
+          const J = Math.floor((step % 4) / 2);
+          const K = step % 2;
+          const cell = 25;
+
+          const hlA = (r, c) => (Math.floor(r/4) === I && Math.floor(c/4) === K) ? { color: 'rgba(239, 68, 68, 0.3)' } : null;
+          const hlB = (r, c) => (Math.floor(r/4) === K && Math.floor(c/4) === J) ? { color: 'rgba(34, 197, 94, 0.3)' } : null;
+          const hlC = (r, c) => (Math.floor(r/4) === I && Math.floor(c/4) === J) ? { color: 'rgba(250, 204, 21, 0.4)' } : null;
+
+          drawMatrix(100, 250, 8, 8, cell, "主存中的 A 矩阵 (分块)", hlA, '#475569');
+          drawMatrix(400, 20, 8, 8, cell, "主存中的 B 矩阵 (分块)", hlB, '#475569');
+          drawMatrix(400, 250, 8, 8, cell, "主存中的 C 矩阵 (分块)", hlC, '#475569');
+
+          const drawCrosshair = (ox, oy, size) => {
+            drawLine(ox + size/2, oy, ox + size/2, oy + size, '#94a3b8');
+            drawLine(ox, oy + size/2, ox + size, oy + size/2, '#94a3b8');
+          }
+          drawCrosshair(100, 250, 200);
+          drawCrosshair(400, 20, 200);
+          drawCrosshair(400, 250, 200);
+
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 22px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(`区域计算: C块[${I}, ${J}]  +=  A块[${I}, ${K}] × B块[${K}, ${J}]`, W / 2, 500);
+          ctx.font = '16px sans-serif';
+          ctx.fillStyle = '#94a3b8';
+          ctx.fillText(`通过缩小关注范围，保证计算区域的完整数据驻留于高速缓存内。`, W / 2, 530);
+        }
+
+        // ====== 彻底重构的第三阶段：微核与寄存器 SIMD 外积运算 ======
+        else if (activeTab === 2) {
+          const k = Math.floor(step / 4);  // 0 to 3
+          const phase = step % 4;          // 0: Load, 1: Broadcast, 2: FMA, 3: Writeback
+          
+          const cell = 60;
+          const gap = 6;
+          const oA_x = 120, oA_y = 180; // A Origin
+          const oB_x = 340, oB_y = 60;  // B Origin
+          const oC_x = 340, oC_y = 180; // C Origin
+
+          const phaseTitles = [
+            "1. 数据装载 (Vector Load) - 调入 SIMD 向量寄存器",
+            "2. 通道广播 (Broadcast) - 触发数据总线多点分发",
+            "3. 乘加指令 (FMA) - 16 个计算核心瞬间并发运算",
+            "4. 就地回写 (Accumulate) - 累加结果保留于 C 寄存器"
+          ];
+
+          // 顶部阶段标题
+          ctx.fillStyle = '#60a5fa';
+          ctx.font = 'bold 24px "Segoe UI", sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(`步数 K = ${k}  |  ${phaseTitles[phase]}`, W / 2, 35);
+
+          const drawRegCell = (x, y, w, h, color, text, glow = false) => {
+            ctx.save();
+            if (glow) {
+              ctx.shadowColor = color;
+              ctx.shadowBlur = 15;
+            }
+            ctx.fillStyle = color;
+            ctx.globalAlpha = glow ? 0.8 : 0.15;
+            ctx.fillRect(x, y, w, h);
+            ctx.strokeStyle = color;
+            ctx.globalAlpha = glow ? 1 : 0.5;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, w, h);
+            if (text) {
+              ctx.fillStyle = glow ? '#fff' : '#cbd5e1';
+              ctx.font = 'bold 15px monospace';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(text, x + w/2, y + h/2);
+            }
+            ctx.restore();
+          };
+
+          // 绘制 A 向量列
+          for (let r = 0; r < 4; r++) {
+            const y = oA_y + r * (cell + gap);
+            const isActive = (phase >= 0 && phase <= 2);
+            drawRegCell(oA_x, y, cell, cell, '#ef4444', `A[${r},${k}]`, isActive);
+          }
+          ctx.fillStyle = '#94a3b8'; ctx.font = '14px sans-serif';
+          ctx.fillText("寄存器 A (列向量)", oA_x + cell/2, oA_y - 15);
+
+          // 绘制 B 向量行
+          for (let c = 0; c < 4; c++) {
+            const x = oC_x + c * (cell + gap);
+            const isActive = (phase >= 0 && phase <= 2);
+            drawRegCell(x, oB_y, cell, cell, '#22c55e', `B[${k},${c}]`, isActive);
+          }
+          ctx.fillStyle = '#94a3b8'; ctx.font = '14px sans-serif';
+          ctx.fillText("寄存器 B (行向量)", oC_x + (cell*4 + gap*3)/2, oB_y - 15);
+
+          // 绘制 Broadcast 广播光束 (极其具有科技感的十字交错)
+          if (phase === 1 || phase === 2) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            // 红色水平射线
+            for (let r = 0; r < 4; r++) {
+              const y = oA_y + r * (cell + gap);
+              ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+              ctx.fillRect(oA_x + cell, y + 15, oC_x + 4*(cell+gap) - oA_x - cell, cell - 30);
+            }
+            // 绿色垂直射线
+            for (let c = 0; c < 4; c++) {
+              const x = oC_x + c * (cell + gap);
+              ctx.fillStyle = 'rgba(34, 197, 94, 0.2)';
+              ctx.fillRect(x + 15, oB_y + cell, cell - 30, oC_y + 4*(cell+gap) - oB_y - cell);
+            }
+            ctx.restore();
+          }
+
+          // 绘制 C 矩阵区域
+          for (let r = 0; r < 4; r++) {
+            for (let c = 0; c < 4; c++) {
+              const x = oC_x + c * (cell + gap);
+              const y = oC_y + r * (cell + gap);
+              
+              let color = '#3b82f6'; // Default idle C color
+              let text = k > 0 || phase === 3 ? 'C+' : 'C';
+              let glow = false;
+
+              if (phase === 2) {
+                color = '#ffffff'; // FMA flash
+                text = 'FMA';
+                glow = true;
+              } else if (phase === 3) {
+                color = '#eab308'; // Writeback yellow
+                glow = true;
+              } else if (k > 0) {
+                 color = '#eab308'; // previously accumulated
+              }
+
+              drawRegCell(x, y, cell, cell, color, text, glow);
+              
+              // 模拟 FMA 核心正在运算的指示灯
+              if (phase === 2) {
+                 ctx.fillStyle = '#ef4444'; ctx.fillRect(x+4, y+cell/2-3, cell-8, 6);
+                 ctx.fillStyle = '#22c55e'; ctx.fillRect(x+cell/2-3, y+4, 6, cell-8);
+              }
+            }
+          }
+          ctx.fillStyle = '#94a3b8'; ctx.font = '14px sans-serif';
+          ctx.fillText("逻辑核心: C 微块常驻区 (4x4)", oC_x + (cell*4 + gap*3)/2, oC_y + 4*(cell+gap) + 15);
+
+          // 底部描述
+          ctx.fillStyle = '#fff'; ctx.font = '16px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+          if (phase === 0) ctx.fillText("从更慢的 L1/L2 缓存中提取数据，填入 CPU 内部极速的向量寄存器中。", W/2, 530);
+          if (phase === 1) ctx.fillText("利用 SIMD 硬件特性，将 A 的元素横向复制，B 的元素纵向复制，为交叉相乘做准备。", W/2, 530);
+          if (phase === 2) ctx.fillText("最核心的一击！一个时钟周期内，直接无缝并发完成 16 次乘法与加法。", W/2, 530);
+          if (phase === 3) ctx.fillText("16 个结果直接保存在 C 的寄存器位置，不写回主存，静静等待下一个 K 维度的累加。", W/2, 530);
+        }
+
+        // ====== 绘制第四阶段：多级缓存与架构统筹 ======
+        else if (activeTab === 3) {
+          const drawMath = (ctx, text, sub, x, y, color = '#000', size = 18) => {
+              ctx.save();
+              ctx.fillStyle = color;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              
+              let mainText = text;
+              let hasTilde = text.startsWith('~');
+              if (hasTilde) mainText = text.substring(1);
+
+              ctx.font = `italic bold ${size}px "Times New Roman", serif`;
+              const mainW = ctx.measureText(mainText).width;
+              let totalW = mainW;
+              let subW = 0;
+              
+              if (sub) {
+                  ctx.font = `italic bold ${size * 0.7}px "Times New Roman", serif`;
+                  subW = ctx.measureText(sub).width;
+                  totalW += subW + 2;
+              }
+
+              const startX = x - totalW / 2 + mainW / 2;
+              ctx.font = `italic bold ${size}px "Times New Roman", serif`;
+              ctx.fillText(mainText, startX, y);
+
+              if (sub) {
+                  ctx.font = `italic bold ${size * 0.7}px "Times New Roman", serif`;
+                  ctx.textAlign = 'left';
+                  ctx.fillText(sub, startX + mainW/2 + 2, y + size * 0.3);
+              }
+              ctx.restore();
+          };
+
+          const drawCleanBlock = (ctx, x, y, w, h, fill, stroke, text, sub, innerLines, highlight, alpha=1) => {
+              ctx.save();
+              ctx.globalAlpha = alpha;
+              
+              ctx.beginPath(); ctx.roundRect(x, y, w, h, 2);
+              ctx.fillStyle = fill; ctx.fill();
+              
+              if (highlight) {
+                  ctx.fillStyle = highlight.color;
+                  ctx.fillRect(x + highlight.x, y + highlight.y, highlight.w, highlight.h);
+              }
+
+              ctx.save(); ctx.clip(); ctx.beginPath();
+              ctx.strokeStyle = stroke === '#ffffff' ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.15)';
+              ctx.lineWidth = 1;
+              if (innerLines === 'h') {
+                  for(let py = y + h/3; py < y + h; py += h/3) { ctx.moveTo(x, py); ctx.lineTo(x + w, py); }
+              } else if (innerLines === 'v') {
+                  for(let px = x + w/4; px < x + w; px += w/4) { ctx.moveTo(px, y); ctx.lineTo(px, y + h); }
+              } else if (innerLines === 'grid') {
+                  for(let py = y + h/3; py < y + h; py += h/3) { ctx.moveTo(x, py); ctx.lineTo(x + w, py); }
+                  for(let px = x + w/4; px < x + w; px += w/4) { ctx.moveTo(px, y); ctx.lineTo(px, y + h); }
+              }
+              ctx.stroke(); ctx.restore();
+
+              ctx.beginPath(); ctx.roundRect(x, y, w, h, 2);
+              ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke();
+
+              if (text) {
+                  const textColor = stroke === '#ffffff' ? '#ffffff' : '#0f172a';
+                  drawMath(ctx, text, sub, x + w/2, y + h/2, textColor, h > 30 ? 20 : 14);
+              }
+              ctx.restore();
+          };
+
+          const drawCleanArrow = (ctx, x1, y1, x2, y2, color, text, alpha=1) => {
+              ctx.save(); ctx.globalAlpha = alpha;
+              ctx.beginPath(); ctx.moveTo(x1, y1);
+              
+              const ctrlX = x1; const ctrlY = y2 - 20;
+              ctx.quadraticCurveTo(ctrlX, ctrlY, x2, y2);
+              
+              ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
+              
+              const angle = Math.atan2(y2 - ctrlY, x2 - ctrlX);
+              ctx.beginPath();
+              ctx.moveTo(x2, y2);
+              ctx.lineTo(x2 - 12 * Math.cos(angle - Math.PI/6), y2 - 12 * Math.sin(angle - Math.PI/6));
+              ctx.lineTo(x2 - 12 * Math.cos(angle + Math.PI/6), y2 - 12 * Math.sin(angle + Math.PI/6));
+              ctx.fillStyle = color; ctx.fill();
+
+              if (text) {
+                  ctx.fillStyle = color; ctx.font = 'bold 16px "Segoe UI", sans-serif'; ctx.textAlign = 'left';
+                  ctx.fillText(text, x1 + 10, (y1 + y2)/2);
+              }
+              ctx.restore();
+          };
+
+          const Y_MEM = 70, Y_L3 = 240, Y_L2 = 360, Y_L1 = 490;
+          const X_C = 60, X_A = 280, X_B = 500;
+          const W_MEM = 140, H_MEM = 120;
+          
+          const C_MEM = '#ffffff';
+          const C_L3 = '#a855f7';
+          const C_L2 = '#22c55e';
+          const C_L1 = '#3b82f6';
+          const C_REG = '#ef4444';
+
+          const drawTopTitle = (title, color) => {
+              ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(W/2 - 200, 15, 400, 36, 6); ctx.fill();
+              ctx.fillStyle = (color === '#ffffff' || color === '#22c55e') ? '#0f172a' : '#ffffff';
+              ctx.font = 'bold 18px "Segoe UI", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+              ctx.fillText(title, W/2, 33);
+          };
+
+          let alphaMem = 1, alphaL3 = 0, alphaL2 = 0, alphaL1 = 0, alphaReg = 0;
+          let hlA = null, hlB = null, hlC = null, hlL3 = null, hlL2 = null;
+          let title = "", titleColor = C_MEM;
+
+          if (step === 0) {
+              title = "5th loop: 划分最大边界"; titleColor = C_MEM;
+          } else if (step === 1) {
+              title = "4th loop: 打包 B 宏面板进 L3 缓存"; titleColor = C_L3;
+              hlA = {x: 70, y: 0, w: 35, h: H_MEM, color: '#e2e8f0'};
+              hlB = {x: 0, y: 40, w: W_MEM, h: 40, color: '#e2e8f0'};
+              alphaL3 = 1;
+          } else if (step === 2) {
+              title = "3rd loop: 打包 A 微面板进 L2 缓存"; titleColor = C_L2;
+              alphaMem = 0.4; alphaL3 = 1; alphaL2 = 1;
+              hlC = {x: 0, y: 40, w: W_MEM, h: 40, color: '#e2e8f0'};
+              hlA = {x: 70, y: 40, w: 35, h: 40, color: '#cbd5e1'};
+          } else if (step === 3) {
+              title = "2nd loop: 提取 B 微面板至 L1 缓冲池"; titleColor = C_L1;
+              alphaMem = 0.15; alphaL3 = 0.7; alphaL2 = 1; alphaL1 = 1;
+              hlL3 = {x: 35, y: 0, w: 15, h: 40, color: '#e2e8f0'};
+          } else if (step === 4) {
+              title = "1st loop: 从 L2/L1 读取进入寄存器"; titleColor = C_REG;
+              alphaMem = 0.05; alphaL3 = 0.3; alphaL2 = 0.7; alphaL1 = 1; alphaReg = 1;
+              hlL2 = {x: 0, y: 15, w: 35, h: 10, color: '#86efac'};
+              hlL3 = {x: 35, y: 0, w: 15, h: 40, color: '#e2e8f0'};
+          } else if (step === 5) {
+              title = "Micro-kernel: 寄存器无阻塞 FMA 运算"; titleColor = C_REG;
+              alphaMem = 0.05; alphaL3 = 0.1; alphaL2 = 0.3; alphaL1 = 0.6; alphaReg = 1;
+          }
+
+          drawTopTitle(title, titleColor);
+
+          if (alphaMem > 0) drawMath(ctx, "+=", "", (X_C+W_MEM+X_A)/2, Y_MEM+H_MEM/2, `rgba(255,255,255,${alphaMem})`, 26);
+
+          if (alphaMem > 0) {
+              drawCleanBlock(ctx, X_C, Y_MEM, W_MEM, H_MEM, C_MEM, '#0f172a', 'C', step===0?'j':'i,j', step<2?null:'h', hlC, alphaMem);
+              drawCleanBlock(ctx, X_A, Y_MEM, W_MEM, H_MEM, C_MEM, '#0f172a', 'A', step===0?'':'i,p', step===0?null:'v', hlA, alphaMem);
+              drawCleanBlock(ctx, X_B, Y_MEM, W_MEM, H_MEM, C_MEM, '#0f172a', 'B', step===0?'j':'p,j', step===0?null:'h', hlB, alphaMem);
+          }
+
+          if (alphaL3 > 0) {
+              drawCleanBlock(ctx, X_B, Y_L3, W_MEM, 40, C_L3, '#ffffff', 'B', 'p,j', step>=3?'v':null, hlL3, alphaL3);
+              if (step === 1) drawCleanArrow(ctx, X_B - 20, Y_MEM + 60, X_B - 20, Y_L3, C_L3, "Pack B", alphaL3);
+          }
+
+          if (alphaL2 > 0) {
+              drawCleanBlock(ctx, X_A + 70, Y_L2, 35, 90, C_L2, '#0f172a', 'A', 'i,p', step>=4?'h':null, hlL2, alphaL2);
+              if (step === 2) drawCleanArrow(ctx, X_A + 50, Y_MEM + 80, X_A + 50, Y_L2, C_L2, "Pack A", alphaL2);
+          }
+
+          if (alphaL1 > 0) {
+              drawCleanBlock(ctx, X_B + 35, Y_L1 - 30, 15, 60, C_L1, '#ffffff', 'B', '', 'h', null, alphaL1);
+              if (step === 3) drawCleanArrow(ctx, X_B + 20, Y_L3 + 40, X_B + 20, Y_L1 - 30, C_L1, "To L1", alphaL1);
+          }
+
+          if (alphaReg > 0) {
+              const rY = 510;
+              drawCleanBlock(ctx, 220, rY, 40, 40, C_REG, '#ffffff', 'C', 'u', null, null, alphaReg);
+              drawMath(ctx, "+=", "", 290, rY + 20, `rgba(255,255,255,${alphaReg})`, 24);
+              
+              drawCleanBlock(ctx, 320, rY + 12, 60, 16, C_L2, '#0f172a', '', '', null, null, alphaReg);
+              if (step === 4) drawCleanArrow(ctx, X_A + 70, Y_L2 + 90, 350, rY, C_REG, "", alphaReg);
+              
+              drawCleanBlock(ctx, 400, rY, 16, 40, C_L1, '#ffffff', '', '', null, null, alphaReg);
+              if (step === 4) drawCleanArrow(ctx, X_B + 35, Y_L1 + 30, 408, rY, C_REG, "", alphaReg);
+          }
+        }
+      }, [activeTab, step]);
+
+      return (
+        <div className="flex flex-col h-screen w-full">
+          <header className="h-16 border-b border-slate-700 bg-slate-900 flex items-center px-6 shrink-0">
+            <h1 className="text-2xl font-bold text-white tracking-wide">
+              极致效能挖掘 <span className="text-slate-500 font-normal ml-2">高性能 GEMM (矩阵乘法) 的进化历程</span>
+            </h1>
+          </header>
+
+          <main className="flex-1 flex overflow-hidden">
+            <aside className="w-[380px] bg-slate-800 border-r border-slate-700 flex flex-col shrink-0">
+              <div className="flex flex-col p-4 space-y-2 border-b border-slate-700 bg-slate-900/50">
+                {TABS.map((t, idx) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setActiveTab(idx)}
+                    className={`px-4 py-3 text-left rounded-lg transition-colors font-medium ${
+                      activeTab === idx 
+                        ? 'bg-blue-600 text-white shadow-md' 
+                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                    }`}
+                  >
+                    {t.title}
+                  </button>
+                ))}
+              </div>
+              <div className="p-6 flex-1 overflow-y-auto">
+                {React.createElement(TABS[activeTab].Content)}
+              </div>
+            </aside>
+
+            <section className="flex-1 flex flex-col bg-slate-950 relative">
+              <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
+                <div className="w-full max-w-[800px] aspect-[4/3] relative rounded-xl overflow-hidden shadow-2xl border border-slate-700 bg-slate-900">
+                  <canvas 
+                    ref={canvasRef} 
+                    width={800} 
+                    height={600} 
+                    className="absolute inset-0 w-full h-full object-contain"
+                  />
+                </div>
+              </div>
+
+              <div className="h-20 bg-slate-800 border-t border-slate-700 flex items-center px-6 gap-6 shrink-0">
+                <div className="flex items-center gap-2 bg-slate-900 p-1.5 rounded-lg border border-slate-700">
+                  <button 
+                    onClick={() => setStep(0)}
+                    className="p-2 rounded hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                    title="重置"
+                  >
+                    <ResetIcon />
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setStep(s => Math.max(0, s - 1));
+                    }}
+                    className="p-2 rounded hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                    title="上一步"
+                  >
+                    <StepBackIcon />
+                  </button>
+                  <button 
+                    onClick={() => {
+                      if (step >= maxSteps - 1) setStep(0);
+                      setIsPlaying(!isPlaying);
+                    }}
+                    className="p-2 rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors shadow"
+                    title={isPlaying ? "暂停" : "播放"}
+                  >
+                    {isPlaying ? <PauseIcon /> : <PlayIcon />}
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setStep(s => Math.min(maxSteps - 1, s + 1));
+                    }}
+                    className="p-2 rounded hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                    title="下一步"
+                  >
+                    <StepFwdIcon />
+                  </button>
+                </div>
+
+                <div className="flex-1 flex items-center gap-4">
+                  <span className="text-sm font-mono text-slate-400 min-w-[60px] text-right">
+                    步数 {step + 1}
+                  </span>
+                  <input 
+                    type="range" 
+                    min="0" 
+                    max={maxSteps - 1} 
+                    value={step} 
+                    onChange={(e) => {
+                      setIsPlaying(false);
+                      setStep(parseInt(e.target.value));
+                    }}
+                    className="flex-1 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  />
+                  <span className="text-sm font-mono text-slate-400 min-w-[40px]">
+                    / {maxSteps}
+                  </span>
+                </div>
+              </div>
+            </section>
+          </main>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

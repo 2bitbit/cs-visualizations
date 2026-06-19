@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>最大装载量问题 - 3叉树回溯可视化</title>
+    
+    <!-- 引入 Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a; /* Tailwind slate-900 */
+            color: #f8fafc; /* Tailwind slate-50 */
+            overflow: hidden; /* 防止整体滚动，保持布局固定 */
+        }
+        .font-mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        
+        /* 隐藏滚动条但保留滚动功能 */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* 核心动画：精准高亮变化的小范围元素 */
+        @keyframes pop-highlight {
+            0% { transform: scale(1); filter: brightness(1); }
+            30% { transform: scale(1.3); filter: brightness(1.5) drop-shadow(0 0 8px rgba(255,255,255,0.8)); color: #fbbf24; }
+            70% { transform: scale(1.3); filter: brightness(1.5) drop-shadow(0 0 8px rgba(255,255,255,0.8)); color: #fbbf24; }
+            100% { transform: scale(1); filter: brightness(1); }
+        }
+        
+        .animate-pop {
+            display: inline-block;
+            animation: pop-highlight 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+            transform-origin: center;
+        }
+
+        /* 容器状态颜色 */
+        .item-ship1 { background-color: #3b82f6; color: white; border-color: #2563eb; } /* blue-500 */
+        .item-ship2 { background-color: #10b981; color: white; border-color: #059669; } /* emerald-500 */
+        .item-skip  { background-color: #64748b; color: white; border-color: #475569; } /* slate-500 */
+        .item-unassigned { background-color: #1e293b; color: #94a3b8; border-color: #334155; border-style: dashed;} /* slate-800 */
+        .item-current { box-shadow: 0 0 0 3px #fbbf24; z-index: 10;} /* amber-400 环绕 */
+
+        /* 树节点样式 */
+        .tree-node-1 { color: #60a5fa; } /* blue-400 */
+        .tree-node-2 { color: #34d399; } /* emerald-400 */
+        .tree-node-0 { color: #94a3b8; } /* slate-400 */
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col p-4 box-border">
+
+<div id="app" class="h-full w-full max-w-7xl mx-auto flex flex-col gap-4">
+    
+    <!-- 头部标题区 -->
+    <header class="flex justify-between items-center bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg shrink-0">
+        <div>
+            <h1 class="text-xl font-bold text-white tracking-wide">最大装载量问题 (双船优化) - 3叉树回溯</h1>
+            <p class="text-sm text-slate-400 mt-1">目标：在不超载前提下，最大化两艘船的总装载重量。</p>
+        </div>
+        <div class="flex gap-6 text-sm font-mono bg-slate-900 p-3 rounded-lg border border-slate-700">
+            <div class="flex flex-col items-center">
+                <span class="text-slate-400">船1容量 (C1)</span>
+                <span class="text-xl font-bold text-blue-400">{{ C1 }}</span>
+            </div>
+            <div class="w-px bg-slate-700"></div>
+            <div class="flex flex-col items-center">
+                <span class="text-slate-400">船2容量 (C2)</span>
+                <span class="text-xl font-bold text-emerald-400">{{ C2 }}</span>
+            </div>
+            <div class="w-px bg-slate-700"></div>
+            <div class="flex flex-col items-center">
+                <span class="text-slate-400">物品总重 (W)</span>
+                <span class="text-xl font-bold text-slate-300">{{ totalWeight }}</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主要内容区 (使用 Grid 保持固定布局) -->
+    <main class="flex-1 grid grid-cols-12 gap-4 min-h-0">
+        
+        <!-- 左侧：物理世界映射 (船只与集装箱) -->
+        <section class="col-span-5 flex flex-col gap-4 min-h-0">
+            <!-- 船只状态面板 -->
+            <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 flex-1 flex flex-col min-h-0 shadow-lg">
+                <h2 class="text-slate-300 font-semibold mb-4 border-b border-slate-700 pb-2">装载状态 (当前节点)</h2>
+                
+                <div class="flex flex-col gap-6 flex-1 justify-center">
+                    <!-- 船1 -->
+                    <div>
+                        <div class="flex justify-between text-sm mb-2 font-mono">
+                            <span class="text-blue-400 font-bold">船只 1 (Ship 1)</span>
+                            <span>
+                                已装载: 
+                                <span :key="stateIndex + '-cw1'" :class="{'animate-pop': isChanged('cw1')}" class="text-blue-400 font-bold text-lg inline-block w-8 text-right">{{ currentStep.cw1 }}</span>
+                                <span class="text-slate-500"> / {{ C1 }}</span>
+                            </span>
+                        </div>
+                        <div class="h-8 bg-slate-900 rounded-full overflow-hidden border border-slate-700 relative">
+                            <div class="h-full bg-blue-500 transition-all duration-300 ease-in-out" :style="{ width: (currentStep.cw1 / C1 * 100) + '%' }"></div>
+                        </div>
+                    </div>
+
+                    <!-- 船2 -->
+                    <div>
+                        <div class="flex justify-between text-sm mb-2 font-mono">
+                            <span class="text-emerald-400 font-bold">船只 2 (Ship 2)</span>
+                            <span>
+                                已装载: 
+                                <span :key="stateIndex + '-cw2'" :class="{'animate-pop': isChanged('cw2')}" class="text-emerald-400 font-bold text-lg inline-block w-8 text-right">{{ currentStep.cw2 }}</span>
+                                <span class="text-slate-500"> / {{ C2 }}</span>
+                            </span>
+                        </div>
+                        <div class="h-8 bg-slate-900 rounded-full overflow-hidden border border-slate-700 relative">
+                            <div class="h-full bg-emerald-500 transition-all duration-300 ease-in-out" :style="{ width: (currentStep.cw2 / C2 * 100) + '%' }"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 集装箱队列 -->
+            <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 h-40 shadow-lg shrink-0 flex flex-col">
+                <h2 class="text-slate-300 font-semibold mb-3 border-b border-slate-700 pb-2">集装箱队列 (重量)</h2>
+                <div class="flex gap-3 justify-center items-center flex-1">
+                    <div v-for="(w, index) in weights" :key="'item-'+index" 
+                         class="w-16 h-16 rounded-lg border-2 flex items-center justify-center font-mono text-xl font-bold transition-colors duration-200"
+                         :class="[
+                            getItemClass(index),
+                            {'item-current animate-bounce': currentStep.i === index && !['BACKTRACK', 'LEAF', 'LEAF_UPDATE', 'PRUNE_BOUND'].includes(currentStep.type)}
+                         ]">
+                         <span :key="stateIndex + '-item-' + index" :class="{'animate-pop': isChanged('item-'+index)}">{{ w }}</span>
+                    </div>
+                </div>
+                <div class="flex justify-center gap-4 mt-2 text-xs text-slate-400">
+                    <span class="flex items-center gap-1"><div class="w-3 h-3 bg-blue-500 rounded-sm"></div>装入船1</span>
+                    <span class="flex items-center gap-1"><div class="w-3 h-3 bg-emerald-500 rounded-sm"></div>装入船2</span>
+                    <span class="flex items-center gap-1"><div class="w-3 h-3 bg-slate-500 rounded-sm"></div>不装载</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- 右侧：算法逻辑、剪枝与日志 -->
+        <section class="col-span-7 flex flex-col gap-4 min-h-0">
+            
+            <!-- 全局最优与剪枝计算面板 -->
+            <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 shadow-lg shrink-0 flex justify-between items-center gap-4">
+                
+                <!-- 限界函数计算区 -->
+                <div class="flex-1 bg-slate-900 p-3 rounded-lg border border-slate-700">
+                    <div class="text-xs text-slate-400 mb-1">限界函数判定 (剩余物品总重 r = <span :key="stateIndex+'-r'" :class="{'animate-pop': isChanged('r'), 'text-white font-bold': true}">{{ currentStep.r }}</span>)</div>
+                    <div class="font-mono text-sm flex items-center flex-wrap gap-1">
+                        <span>(cw1:</span><span class="text-blue-400">{{currentStep.cw1}}</span><span>+</span>
+                        <span>cw2:</span><span class="text-emerald-400">{{currentStep.cw2}}</span><span>)</span>
+                        <span>+ r:</span><span class="text-slate-300">{{currentStep.r}}</span>
+                        <span class="mx-1 text-slate-500">=</span>
+                        <span :key="stateIndex+'-potential'" :class="{'animate-pop': isChanged('potential'), 'text-purple-400 font-bold text-base': true}">{{ currentStep.cw1 + currentStep.cw2 + currentStep.r }}</span>
+                        
+                        <!-- 动态判定符号 -->
+                        <span class="mx-2 font-bold" 
+                              :class="{'text-red-500': (currentStep.cw1 + currentStep.cw2 + currentStep.r) <= currentStep.bestW, 'text-green-500': (currentStep.cw1 + currentStep.cw2 + currentStep.r) > currentStep.bestW}">
+                              {{ (currentStep.cw1 + currentStep.cw2 + currentStep.r) <= currentStep.bestW ? '&le;' : '&gt;' }}
+                        </span>
+                        
+                        <span class="text-slate-400">已知最优:</span>
+                        <span :key="stateIndex+'-best-cmp'" :class="{'animate-pop': isChanged('bestW'), 'text-amber-400 font-bold text-base': true}">{{ currentStep.bestW }}</span>
+                    </div>
+                </div>
+
+                <!-- 当前全局最优解 -->
+                <div class="bg-slate-900 p-3 rounded-lg border border-amber-600/50 flex flex-col items-center justify-center min-w-[140px]">
+                    <div class="text-xs text-amber-500/80 mb-1">当前记录最大装载量</div>
+                    <div :key="stateIndex+'-bestW'" :class="{'animate-pop': isChanged('bestW')}" class="text-3xl font-bold text-amber-400 font-mono">{{ currentStep.bestW }}</div>
+                </div>
+            </div>
+
+            <!-- 操作日志与当前决策树路径 -->
+            <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 shadow-lg flex-1 flex flex-col min-h-0">
+                <div class="flex justify-between items-end border-b border-slate-700 pb-2 mb-3">
+                    <h2 class="text-slate-300 font-semibold">执行日志 (Action Log)</h2>
+                    <div class="text-xs font-mono text-slate-400 bg-slate-900 px-2 py-1 rounded">
+                        当前决策路径: [ 
+                        <span v-for="(p, idx) in currentStep.path" :key="'path-'+idx" 
+                              :class="{'tree-node-1': p===1, 'tree-node-2': p===2, 'tree-node-0': p===0}">
+                            {{ p === -1 ? '_' : (p===1 ? '船1' : (p===2 ? '船2' : '弃')) }}<span v-if="idx < weights.length-1" class="text-slate-600">, </span>
+                        </span>
+                        ]
+                    </div>
+                </div>
+                
+                <!-- 滚动日志区 -->
+                <div class="flex-1 overflow-y-auto no-scrollbar font-mono text-sm pr-2" id="log-container">
+                    <div v-for="(log, idx) in logHistory" :key="idx" 
+                         class="mb-2 py-1.5 px-3 rounded-md border-l-4"
+                         :class="getLogStyle(log.type, idx === logHistory.length - 1)">
+                        <div class="flex items-start gap-2">
+                            <span class="text-slate-500 text-xs mt-0.5 w-6 shrink-0">{{idx+1}}.</span>
+                            <span v-html="formatLogMessage(log.msg)"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- 底部控制栏 -->
+    <footer class="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg shrink-0 flex items-center justify-between">
+        <!-- 进度提示 -->
+        <div class="text-sm font-mono text-slate-400 w-1/4">
+            Step: <span class="text-white">{{ stateIndex + 1 }}</span> / {{ steps.length }}
+        </div>
+        
+        <!-- 播放控制 -->
+        <div class="flex gap-4 justify-center items-center w-1/2">
+            <button @click="reset" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-slate-500">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" /></svg>
+            </button>
+            <button @click="stepBack" :disabled="stateIndex === 0" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-slate-500">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>
+            </button>
+            <button @click="togglePlay" class="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 flex items-center gap-2 w-32 justify-center">
+                <span v-if="!isPlaying">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" /></svg>
+                    自动播放
+                </span>
+                <span v-else>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg>
+                    暂停
+                </span>
+            </button>
+            <button @click="stepForward" :disabled="stateIndex === steps.length - 1" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-slate-500">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" /></svg>
+            </button>
+        </div>
+
+        <!-- 速度调节 -->
+        <div class="flex items-center gap-3 w-1/4 justify-end">
+            <span class="text-sm text-slate-400 font-mono">慢</span>
+            <input type="range" min="100" max="2000" step="100" v-model="playSpeedRaw" class="w-24 accent-indigo-500" style="direction: rtl;">
+            <span class="text-sm text-slate-400 font-mono">快</span>
+        </div>
+    </footer>
+</div>
+
+<script>
+    const { createApp, ref, computed, watch, nextTick } = Vue;
+
+    createApp({
+        setup() {
+            // --- 核心问题数据配置 ---
+            // 选择一个能展示剪枝、有3个分支，但深度不至于让步骤过多的例子
+            const weights = [12, 10, 8, 5]; 
+            const C1 = 15;
+            const C2 = 15;
+            const totalWeight = weights.reduce((a, b) => a + b, 0);
+
+            // --- 状态管理 ---
+            const steps = ref([]);       // 预计算的完整执行步骤序列
+            const stateIndex = ref(0);   // 当前执行到的步骤索引
+            const isPlaying = ref(false);
+            const playSpeedRaw = ref(800); // 原始滑动条数据(翻转逻辑)
+            let playInterval = null;
+
+            // 实际播放速度（毫秒），滑动条值越大（向左），实际延迟越大，速度越慢
+            const playSpeed = computed(() => playSpeedRaw.value);
+            
+            // 当前帧的状态
+            const currentStep = computed(() => steps.value[stateIndex.value] || {});
+            // 用于展示的历史日志（只截取到当前索引）
+            const logHistory = computed(() => steps.value.slice(0, stateIndex.value + 1));
+
+            // --- 辅助函数：预计算所有步骤 (3叉树回溯算法核心) ---
+            const generateSteps = () => {
+                let recordedSteps = [];
+                let bestW = 0;
+                let currentPath = new Array(weights.length).fill(-1); // -1 表示未决定
+                
+                // 辅助记录状态函数，深度拷贝必须的值
+                const record = (type, msg, i, cw1, cw2, r, changes = []) => {
+                    recordedSteps.push({
+                        type, msg, i, cw1, cw2, r, bestW,
+                        path: [...currentPath],
+                        changes: [...changes] // 记录哪些数据发生了变化，用于触发 CSS 动画
+                    });
+                };
+
+                // 核心回溯递归函数
+                const backtrack = (i, cw1, cw2, r) => {
+                    // 到达叶子节点
+                    if (i === weights.length) {
+                        if (cw1 + cw2 > bestW) {
+                            bestW = cw1 + cw2;
+                            record('LEAF_UPDATE', `到达叶子节点，总重 <span class="text-amber-400 font-bold">${cw1+cw2}</span> 大于已知最优，更新！`, i, cw1, cw2, r, ['bestW']);
+                        } else {
+                            record('LEAF', `到达叶子节点，总重 ${cw1+cw2} 未超越最优解。`, i, cw1, cw2, r, []);
+                        }
+                        return;
+                    }
+
+                    // --- 最优性剪枝 (限界函数) ---
+                    record('ENTER', `开始考察集装箱 ${i+1} (重量 <span class="text-white font-bold">${weights[i]}</span>)`, i, cw1, cw2, r, ['item-'+i]);
+                    
+                    if (cw1 + cw2 + r <= bestW) {
+                        record('PRUNE_BOUND', `🚨 限界剪枝：当前重量(${cw1+cw2}) + 剩余(${r}) &le; 最优(${bestW})，此分支不可能产生更好结果。`, i, cw1, cw2, r, ['bound']);
+                        return;
+                    }
+
+                    // --- 分支 1：尝试装入第一艘船 ---
+                    record('TRY_1', `尝试将集装箱 ${i+1} 装入 船1`, i, cw1, cw2, r, []);
+                    if (cw1 + weights[i] <= C1) {
+                        currentPath[i] = 1;
+                        record('ASSIGN_1', `集装箱 ${i+1} 成功装入 船1。`, i, cw1 + weights[i], cw2, r - weights[i], ['cw1', 'item-'+i, 'r', 'potential']);
+                        backtrack(i + 1, cw1 + weights[i], cw2, r - weights[i]);
+                        currentPath[i] = -1; // 回溯状态重置
+                        record('BACKTRACK', `从 船1 分支回溯，撤销集装箱 ${i+1}。`, i, cw1, cw2, r, ['cw1', 'item-'+i, 'r', 'potential']);
+                    } else {
+                        record('PRUNE_CAP1', `🚫 容量剪枝：船1超载 (${cw1} + ${weights[i]} &gt; ${C1})，无法装入。`, i, cw1, cw2, r, ['cap1']);
+                    }
+
+                    // --- 分支 2：尝试装入第二艘船 ---
+                    record('TRY_2', `尝试将集装箱 ${i+1} 装入 船2`, i, cw1, cw2, r, []);
+                    if (cw2 + weights[i] <= C2) {
+                        currentPath[i] = 2;
+                        record('ASSIGN_2', `集装箱 ${i+1} 成功装入 船2。`, i, cw1, cw2 + weights[i], r - weights[i], ['cw2', 'item-'+i, 'r', 'potential']);
+                        backtrack(i + 1, cw1, cw2 + weights[i], r - weights[i]);
+                        currentPath[i] = -1;
+                        record('BACKTRACK', `从 船2 分支回溯，撤销集装箱 ${i+1}。`, i, cw1, cw2, r, ['cw2', 'item-'+i, 'r', 'potential']);
+                    } else {
+                        record('PRUNE_CAP2', `🚫 容量剪枝：船2超载 (${cw2} + ${weights[i]} &gt; ${C2})，无法装入。`, i, cw1, cw2, r, ['cap2']);
+                    }
+
+                    // --- 分支 3：尝试不装载 ---
+                    record('TRY_0', `尝试 <span class="text-slate-400">不装载</span> 集装箱 ${i+1} (直接丢弃)`, i, cw1, cw2, r, []);
+                    currentPath[i] = 0;
+                    record('ASSIGN_0', `确定不装载集装箱 ${i+1}。`, i, cw1, cw2, r - weights[i], ['item-'+i, 'r', 'potential']);
+                    backtrack(i + 1, cw1, cw2, r - weights[i]);
+                    currentPath[i] = -1;
+                    record('BACKTRACK', `从 不装载 分支回溯，撤销决策。`, i, cw1, cw2, r, ['item-'+i, 'r', 'potential']);
+                };
+
+                // 初始化启动
+                record('START', `算法开始。初始状态：船1为空，船2为空，剩余未分配重量 ${totalWeight}。`, 0, 0, 0, totalWeight, []);
+                backtrack(0, 0, 0, totalWeight);
+                record('END', `算法结束。最大可装载总重量为 <span class="text-amber-400 font-bold">${bestW}</span>。`, weights.length, 0, 0, 0, []);
+
+                return recordedSteps;
+            };
+
+            // 初始化生成数据
+            steps.value = generateSteps();
+
+            // --- UI 辅助方法 ---
+
+            // 判断特定元素在当前步骤是否被标记为改变，用于触发动画
+            const isChanged = (key) => {
+                if(!currentStep.value.changes) return false;
+                return currentStep.value.changes.includes(key);
+            };
+
+            // 获取集装箱的样式类
+            const getItemClass = (idx) => {
+                const pathVal = currentStep.value.path[idx];
+                if (pathVal === 1) return 'item-ship1';
+                if (pathVal === 2) return 'item-ship2';
+                if (pathVal === 0) return 'item-skip';
+                return 'item-unassigned';
+            };
+
+            // 格式化日志信息（安全渲染HTML片段）
+            const formatLogMessage = (msg) => msg; // 因为在生成时已经包裹好了span，直接返回即可
+
+            // 根据日志类型设置不同的颜色样式
+            const getLogStyle = (type, isLast) => {
+                let base = ' border-slate-700 bg-slate-900/50 text-slate-300 ';
+                if (isLast) base += ' bg-slate-700/80 shadow-md transform scale-[1.01] transition-transform'; // 当前步骤微凸起
+                
+                if (type === 'PRUNE_BOUND') return base + ' border-purple-500 text-purple-200';
+                if (type.startsWith('PRUNE_CAP')) return base + ' border-red-500 text-red-200';
+                if (type === 'LEAF_UPDATE') return base + ' border-amber-400 text-amber-100 bg-amber-900/20';
+                if (type === 'TRY_1' || type === 'ASSIGN_1') return base + ' border-blue-500';
+                if (type === 'TRY_2' || type === 'ASSIGN_2') return base + ' border-emerald-500';
+                if (type === 'BACKTRACK') return base + ' border-slate-600 text-slate-400 opacity-80';
+                
+                return base;
+            };
+
+            // --- 控制逻辑 ---
+            
+            // 自动滚动日志到底部
+            watch(stateIndex, () => {
+                nextTick(() => {
+                    const container = document.getElementById('log-container');
+                    if (container) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                });
+            });
+
+            const stepForward = () => {
+                if (stateIndex.value < steps.value.length - 1) {
+                    stateIndex.value++;
+                } else {
+                    pause();
+                }
+            };
+
+            const stepBack = () => {
+                if (stateIndex.value > 0) {
+                    stateIndex.value--;
+                }
+            };
+
+            const reset = () => {
+                pause();
+                stateIndex.value = 0;
+            };
+
+            const play = () => {
+                isPlaying.value = true;
+                playInterval = setInterval(() => {
+                    if (stateIndex.value < steps.value.length - 1) {
+                        stepForward();
+                    } else {
+                        pause();
+                    }
+                }, playSpeed.value);
+            };
+
+            const pause = () => {
+                isPlaying.value = false;
+                if (playInterval) clearInterval(playInterval);
+            };
+
+            const togglePlay = () => {
+                if (isPlaying.value) pause();
+                else play();
+            };
+
+            // 监听速度变化，如果正在播放则重启定时器
+            watch(playSpeedRaw, () => {
+                if (isPlaying.value) {
+                    pause();
+                    play();
+                }
+            });
+
+            return {
+                weights, C1, C2, totalWeight,
+                steps, stateIndex, currentStep, logHistory,
+                isPlaying, playSpeedRaw,
+                stepForward, stepBack, reset, togglePlay,
+                getItemClass, isChanged, formatLogMessage, getLogStyle
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>

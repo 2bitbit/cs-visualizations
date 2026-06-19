@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSAPP 经典案例：动态链接与延迟绑定 (PLT/GOT)</title>
+    <!-- 引入 Tailwind CSS 进行布局和静态样式 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Vue 3 进行状态管理和逻辑控制 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        /* 全局字体设置，保证代码等宽和可读性 */
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; }
+        .code-font { font-family: 'Courier New', Courier, monospace; }
+        
+        /* 核心动画：元素高亮，稍微放大后回落（脉冲效果），不使用连线 */
+        @keyframes pulse-pop {
+            0%   { transform: scale(1);   background-color: #fef08a; color: #1e3a8a; box-shadow: 0 0 0 rgba(0,0,0,0); }
+            50%  { transform: scale(1.06); background-color: #fef08a; color: #1e3a8a; box-shadow: 0 4px 10px rgba(0,0,0,0.15); font-weight: bold;}
+            100% { transform: scale(1);   background-color: #fef08a; color: #1e3a8a; box-shadow: 0 0 0 rgba(0,0,0,0); font-weight: bold;}
+        }
+
+        /* 激活状态类 */
+        .active-cell {
+            animation: pulse-pop 0.8s ease-in-out infinite alternate !important;
+            border-color: #ca8a04 !important;
+            z-index: 10;
+            position: relative;
+        }
+
+        /* 保证各个面板大小绝对固定，内容变化不影响布局 */
+        .fixed-panel {
+            min-height: 480px;
+            height: 480px;
+            overflow-y: auto;
+        }
+        
+        .transition-base {
+            transition: all 0.3s ease;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+<div id="app" class="flex flex-col h-full p-4">
+    
+    <!-- 顶部标题与控制栏 -->
+    <div class="bg-white shadow-md rounded-lg p-4 mb-4 flex flex-wrap justify-between items-center shrink-0">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">动态链接: PLT 与 GOT 的延迟绑定机制</h1>
+            <p class="text-sm text-gray-500 mt-1">模拟共享库函数 add() 的第一次与第二次调用过程</p>
+        </div>
+        <div class="flex items-center space-x-4 bg-gray-50 p-2 rounded border border-gray-200">
+            <button @click="reset" class="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition-base font-medium">重置</button>
+            <button @click="prevStep" :disabled="currentStep === 0" class="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50 transition-base font-medium">上一步</button>
+            <button @click="nextStep" :disabled="currentStep === steps.length - 1" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 transition-base font-medium">下一步</button>
+            
+            <div class="w-px h-8 bg-gray-300 mx-2"></div> <!-- 分隔线 -->
+            
+            <button @click="togglePlay" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-base font-medium w-24">
+                {{ isPlaying ? '暂停' : '自动播放' }}
+            </button>
+            <div class="flex flex-col items-center">
+                <label class="text-xs text-gray-600 mb-1">播放速度: {{ (2000 - playSpeed)/1000 + 0.2 }}x</label>
+                <!-- 速度滑动条：值越小速度越快，所以做个映射 -->
+                <input type="range" min="200" max="1800" step="100" v-model="playSpeedSlider" class="w-24 cursor-pointer">
+            </div>
+        </div>
+    </div>
+
+    <!-- 叙述面板（当前状态解说） -->
+    <div class="bg-blue-50 border-l-4 border-blue-500 p-4 mb-4 rounded shadow-sm shrink-0 h-24 flex items-center">
+        <div class="w-full">
+            <h3 class="font-bold text-blue-800 text-lg mb-1">步骤 {{ currentStep }} / {{ steps.length - 1 }}</h3>
+            <p class="text-gray-800 text-md">{{ currentStepData.desc }}</p>
+        </div>
+    </div>
+
+    <!-- 主展示区 (4列固定布局) -->
+    <div class="flex-grow grid grid-cols-4 gap-4 overflow-hidden">
+        
+        <!-- 列 1: 主程序 (Caller) -->
+        <div class="bg-white rounded-lg shadow-md border border-gray-200 flex flex-col fixed-panel">
+            <div class="bg-gray-800 text-white p-2 rounded-t-lg text-center font-bold">用户代码 (代码段)</div>
+            <div class="p-4 flex-grow flex flex-col justify-center space-y-4 code-font text-sm">
+                <div class="p-3 border rounded transition-base" :class="{'active-cell': isTargetActive('main-start')}">
+                    <span class="text-gray-500">0x400500:</span> <br>
+                    int main() {
+                </div>
+                <div class="p-3 border rounded transition-base ml-4" :class="{'active-cell': isTargetActive('main-call1')}">
+                    <span class="text-gray-500">0x400510:</span> <br>
+                    <span class="text-blue-600 font-bold">call add@plt</span> <span class="text-gray-400">// 第一次调用</span>
+                </div>
+                <div class="p-3 border rounded transition-base ml-4" :class="{'active-cell': isTargetActive('main-call2')}">
+                    <span class="text-gray-500">0x400515:</span> <br>
+                    <span class="text-blue-600 font-bold">call add@plt</span> <span class="text-gray-400">// 第二次调用</span>
+                </div>
+                <div class="p-3 border rounded transition-base ml-4">
+                    <span class="text-gray-500">0x40051A:</span> <br>
+                    return 0;
+                </div>
+                <div class="p-3 border rounded transition-base">
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- 列 2: PLT (过程链接表) -->
+        <div class="bg-white rounded-lg shadow-md border border-gray-200 flex flex-col fixed-panel">
+            <div class="bg-indigo-700 text-white p-2 rounded-t-lg text-center font-bold">PLT (代码段，只读)</div>
+            <div class="p-4 flex-grow flex flex-col space-y-4 code-font text-sm">
+                <!-- PLT[0] 公共桩 -->
+                <div class="border-2 border-gray-300 rounded overflow-hidden">
+                    <div class="bg-gray-100 p-1 text-center font-bold text-xs">PLT[0] (公共桩)</div>
+                    <div class="p-2 transition-base" :class="{'active-cell': isTargetActive('plt-0-push')}">
+                        pushq *GOT[1] <span class="text-xs text-gray-500">// 压入Link Map</span>
+                    </div>
+                    <div class="p-2 transition-base border-t" :class="{'active-cell': isTargetActive('plt-0-jmp')}">
+                        jmpq  *GOT[2] <span class="text-xs text-gray-500">// 跳向链接器</span>
+                    </div>
+                </div>
+
+                <!-- PLT[1] add函数的PLT条目 -->
+                <div class="border-2 border-indigo-300 rounded overflow-hidden">
+                    <div class="bg-indigo-50 p-1 text-center font-bold text-xs text-indigo-800">PLT[1] (add@plt)</div>
+                    <div class="p-2 transition-base" :class="{'active-cell': isTargetActive('plt-1-jmp')}">
+                        jmpq  *GOT[3] <span class="text-xs text-gray-500">// 查表跳转</span>
+                    </div>
+                    <div class="p-2 transition-base border-t" :class="{'active-cell': isTargetActive('plt-1-push')}">
+                        pushq $0x1    <span class="text-xs text-gray-500">// 函数ID</span>
+                    </div>
+                    <div class="p-2 transition-base border-t" :class="{'active-cell': isTargetActive('plt-1-jmp0')}">
+                        jmpq  0x400400 <span class="text-xs text-gray-500">// 跳到PLT[0]</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 列 3: GOT (全局偏移表) -->
+        <div class="bg-white rounded-lg shadow-md border border-gray-200 flex flex-col fixed-panel">
+            <div class="bg-orange-600 text-white p-2 rounded-t-lg text-center font-bold">GOT (数据段，可读写)</div>
+            <div class="p-4 flex-grow flex flex-col space-y-2 code-font text-sm">
+                
+                <div class="border rounded p-2 transition-base flex justify-between" :class="{'active-cell': isTargetActive('got-0')}">
+                    <span class="font-bold text-gray-700">GOT[0]</span>
+                    <span class="text-gray-500">.dynamic地址</span>
+                </div>
+                
+                <div class="border rounded p-2 transition-base flex flex-col" :class="{'active-cell': isTargetActive('got-1')}">
+                    <div class="flex justify-between border-b pb-1 mb-1">
+                        <span class="font-bold text-gray-700">GOT[1]</span>
+                        <span class="text-gray-500">链接器标识</span>
+                    </div>
+                    <div class="text-center text-xs text-blue-600">0x7FFFF... (Link Map)</div>
+                </div>
+                
+                <div class="border rounded p-2 transition-base flex flex-col" :class="{'active-cell': isTargetActive('got-2')}">
+                    <div class="flex justify-between border-b pb-1 mb-1">
+                        <span class="font-bold text-gray-700">GOT[2]</span>
+                        <span class="text-gray-500">链接器入口</span>
+                    </div>
+                    <div class="text-center text-xs text-blue-600">0x7FFF_LINKER_ADDR</div>
+                </div>
+
+                <!-- GOT[3] 关键目标，值会动态变化 -->
+                <div class="border-2 border-orange-400 rounded p-2 transition-base flex flex-col mt-4" :class="{'active-cell': isTargetActive('got-3')}">
+                    <div class="flex justify-between border-b border-orange-200 pb-1 mb-1">
+                        <span class="font-bold text-orange-800">GOT[3] (add)</span>
+                    </div>
+                    <div class="text-center font-bold transition-base py-1 rounded" :class="got3Class">
+                        {{ got3Value }}
+                    </div>
+                    <div class="text-center text-xs text-gray-500 mt-1">
+                        {{ got3Desc }}
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- 列 4: 动态链接器 & 共享库 -->
+        <div class="bg-white rounded-lg shadow-md border border-gray-200 flex flex-col fixed-panel">
+            <div class="bg-green-700 text-white p-2 rounded-t-lg text-center font-bold">内存 (共享区)</div>
+            <div class="p-4 flex-grow flex flex-col space-y-6 code-font text-sm">
+                
+                <!-- 动态链接器 (_dl_runtime_resolve) -->
+                <div class="border-2 border-green-300 rounded overflow-hidden">
+                    <div class="bg-green-100 p-1 text-center font-bold text-xs text-green-800">动态链接器 (_dl_runtime_resolve)</div>
+                    <div class="p-3 transition-base text-center" :class="{'active-cell': isTargetActive('linker-resolve')}">
+                        1. 解析标识为 0x1 的函数<br>
+                        (在符号表中查找 add)
+                    </div>
+                    <div class="p-3 transition-base border-t text-center" :class="{'active-cell': isTargetActive('linker-update')}">
+                        2. 将真实地址写入 GOT[3]
+                    </div>
+                    <div class="p-3 transition-base border-t text-center" :class="{'active-cell': isTargetActive('linker-call')}">
+                        3. 跳转到 add() 的真实地址
+                    </div>
+                </div>
+
+                <!-- 共享库 (libc.so 中的 add) -->
+                <div class="border-2 border-purple-300 rounded overflow-hidden">
+                    <div class="bg-purple-100 p-1 text-center font-bold text-xs text-purple-800">共享库 (lib.so)</div>
+                    <div class="p-4 transition-base text-center bg-purple-50" :class="{'active-cell': isTargetActive('lib-add')}">
+                        <span class="font-bold text-purple-900">真正的 add() 函数体</span><br>
+                        <span class="text-xs text-gray-500">地址: 0x7FFF_REAL_ADD</span><br><br>
+                        执行加法操作... <br>
+                        return;
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, computed, watch, onUnmounted } = Vue;
+
+    createApp({
+        setup() {
+            const currentStep = ref(0);
+            const isPlaying = ref(false);
+            const playSpeedSlider = ref(1000); // 绑定滑块的值 (反向映射到定时器)
+            let timer = null;
+
+            // GOT[3] 的状态模拟
+            const got3Value = ref('0x400436');
+            const got3Desc = ref('指向 PLT[1] 的第二条指令');
+            const got3Class = ref('text-red-600 bg-red-50');
+
+            // 定义所有的步骤和对应的叙述文本，以及触发哪个元素的动画 (target)
+            const steps = [
+                { id: 0, target: 'main-start', desc: "程序启动。这是执行的初始状态。即将发生对外部共享库函数 add() 的调用。" },
+                
+                // --- 第一次调用：延迟绑定过程 ---
+                { id: 1, target: 'main-call1', desc: "[第一次调用] 执行 call add@plt。由于是共享库函数，编译器不知道真实地址，只能跳转到代码段中的 PLT 表。" },
+                { id: 2, target: 'plt-1-jmp', desc: "进入 PLT[1]。第一条指令是无条件跳转：jmp *GOT[3]。它指示 CPU 去 GOT[3] 里面读取地址，并跳过去。" },
+                { id: 3, target: 'got-3', desc: "CPU 读取 GOT[3] 的内容。神奇的是，在程序刚加载时，GOT[3] 并没有存真实的地址，而是默认存了 PLT[1] 下一条指令的地址 (0x400436)！" },
+                { id: 4, target: 'plt-1-push', desc: "由于 GOT[3] 指向这里，CPU 执行了 PLT[1] 的第二条指令。这里将函数 ID (0x1，代表 add 函数) 压入栈中，为链接器做准备。" },
+                { id: 5, target: 'plt-1-jmp0', desc: "接着执行跳转，去到 PLT[0]（公共桩代码）。所有尚未解析的外部函数最终都会先跳到这里。" },
+                { id: 6, target: 'plt-0-push', desc: "在 PLT[0] 中，将 GOT[1] 的内容（Link Map，动态链接器的内部数据结构标识）压入栈中。" },
+                { id: 7, target: 'got-1', desc: "读取 GOT[1]..." },
+                { id: 8, target: 'plt-0-jmp', desc: "跳向 GOT[2] 中存储的地址，正式将控制权交给【动态链接器】！" },
+                { id: 9, target: 'got-2', desc: "读取 GOT[2] (即动态链接器 _dl_runtime_resolve 的内存入口)。" },
+                { id: 10, target: 'linker-resolve', desc: "进入动态链接器。链接器取出栈中的标识和函数ID，在内存中查表，寻找真正的 add() 函数位于共享库的哪里。" },
+                { id: 11, target: 'linker-update', desc: "【高光时刻】链接器找到了 add() 的真实地址。为了以后不用再找，它把真实地址写入到 GOT[3] 中！" },
+                // 触发 GOT 更新
+                { id: 12, target: 'got-3', desc: "观察 GOT[3]！它的值已经被修改为真正的 add() 函数入口地址。这就是“延迟绑定(Lazy Binding)”。" },
+                { id: 13, target: 'linker-call', desc: "链接器工作完成，直接将控制流跳转到刚刚找到的真正 add() 函数处。" },
+                { id: 14, target: 'lib-add', desc: "执行共享库中真实的 add() 逻辑。执行完毕后，返回主程序。" },
+                
+                // --- 第二次调用：直接跳转 ---
+                { id: 15, target: 'main-call2', desc: "[第二次调用] 程序继续运行，不久后再次执行 call add@plt。" },
+                { id: 16, target: 'plt-1-jmp', desc: "再次进入 PLT[1]。依然是执行第一条指令：jmp *GOT[3]。" },
+                { id: 17, target: 'got-3', desc: "CPU 去读取 GOT[3]。注意！这次 GOT[3] 里面存放的已经是真正的函数地址了！" },
+                { id: 18, target: 'lib-add', desc: "不再经过链接器！CPU 直接一跃跳转到了共享库中真实的 add() 函数。性能开销被降到了最低。" },
+                { id: 19, target: 'main-start', desc: "演示结束。通过 PLT 和 GOT 的配合，既保证了代码的位置无关，又通过延迟绑定优化了程序加载速度。" },
+            ];
+
+            const currentStepData = computed(() => steps[currentStep.value]);
+
+            const isTargetActive = (targetName) => {
+                return currentStepData.value.target === targetName;
+            };
+
+            const updateGot3State = (step) => {
+                if (step >= 12) {
+                    got3Value.value = '0x7FFF_REAL_ADD';
+                    got3Desc.value = '真实函数地址 (已解析)';
+                    got3Class.value = 'text-green-800 bg-green-200';
+                } else {
+                    got3Value.value = '0x400436';
+                    got3Desc.value = '指向 PLT[1] 的第二条指令';
+                    got3Class.value = 'text-red-600 bg-red-50';
+                }
+            };
+
+            const nextStep = () => {
+                if (currentStep.value < steps.length - 1) {
+                    currentStep.value++;
+                    updateGot3State(currentStep.value);
+                } else {
+                    pause();
+                }
+            };
+
+            const prevStep = () => {
+                if (currentStep.value > 0) {
+                    currentStep.value--;
+                    updateGot3State(currentStep.value);
+                }
+            };
+
+            const reset = () => {
+                pause();
+                currentStep.value = 0;
+                updateGot3State(0);
+            };
+
+            const play = () => {
+                isPlaying.value = true;
+                // 倒置滑动条逻辑：滑块值越大，真实 interval 越小
+                const actualInterval = 2000 - playSpeedSlider.value;
+                timer = setInterval(() => {
+                    if (currentStep.value < steps.length - 1) {
+                        nextStep();
+                    } else {
+                        pause();
+                    }
+                }, actualInterval);
+            };
+
+            const pause = () => {
+                isPlaying.value = false;
+                if (timer) {
+                    clearInterval(timer);
+                    timer = null;
+                }
+            };
+
+            const togglePlay = () => {
+                if (isPlaying.value) {
+                    pause();
+                } else {
+                    if (currentStep.value === steps.length - 1) reset(); // 如果到底了，先重置
+                    play();
+                }
+            };
+
+            // 监听速度滑块变化，实时调整定时器
+            watch(playSpeedSlider, () => {
+                if (isPlaying.value) {
+                    pause();
+                    play();
+                }
+            });
+
+            onUnmounted(() => {
+                pause();
+            });
+
+            return {
+                currentStep,
+                steps,
+                currentStepData,
+                isTargetActive,
+                nextStep,
+                prevStep,
+                reset,
+                isPlaying,
+                togglePlay,
+                playSpeedSlider,
+                got3Value,
+                got3Desc,
+                got3Class
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>

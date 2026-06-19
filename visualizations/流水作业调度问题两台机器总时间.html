@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>流水作业调度动态演示 (2台机器)</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc; }
+        /* 针对表格容器的滚动条美化 */
+        .custom-scrollbar::-webkit-scrollbar { height: 8px; width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        /* 空闲等待斜纹背景 */
+        .idle-pattern {
+            background-image: repeating-linear-gradient(
+                45deg,
+                transparent,
+                transparent 5px,
+                #cbd5e1 5px,
+                #cbd5e1 6px
+            );
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8 flex justify-center items-start min-h-screen">
+
+<div id="app" class="max-w-7xl w-full bg-white rounded-2xl shadow-xl p-6 md:p-8 space-y-6">
+    <!-- 头部区域：标题与控制面板 -->
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center border-b pb-5 gap-4">
+        <div>
+            <h1 class="text-2xl md:text-3xl font-bold text-slate-800">流水作业调度推演 (Flow Shop)</h1>
+            <p class="text-sm md:text-base text-slate-500 mt-2">
+                观察对比：M2 机器的<span class="font-semibold text-slate-700">空闲时间(Idle Time)</span>是如何被 Johnson 法则消除的。
+            </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+            <select v-model="currentStrategy" @change="reset" class="bg-slate-50 border border-slate-300 text-slate-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 p-2.5 outline-none cursor-pointer shadow-sm transition-all hover:bg-slate-100">
+                <option value="sequential">默认顺序 (1->2->3->4->5->6)</option>
+                <option value="johnson">🌟 Johnson 法则最优顺序</option>
+            </select>
+            <button @click="reset" class="px-4 py-2.5 bg-slate-100 text-slate-700 font-medium rounded-lg hover:bg-slate-200 transition-colors shadow-sm focus:ring-2 focus:ring-slate-300 outline-none">
+                重置
+            </button>
+            <button @click="stepForward" :disabled="isFinished" :class="isFinished ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg transform active:scale-95'" class="px-5 py-2.5 font-medium rounded-lg transition-all flex items-center outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                <svg v-if="!isFinished" class="w-5 h-5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg>
+                <svg v-else class="w-5 h-5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                {{ isFinished ? '推演完成' : '单步推演' }}
+            </button>
+        </div>
+    </div>
+
+    <!-- 主体内容网格 -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        
+        <!-- 左侧：作业数据与调度序列表格 -->
+        <div class="lg:col-span-4 flex flex-col space-y-4">
+            <div class="flex items-center space-x-2">
+                <div class="w-1.5 h-6 bg-indigo-500 rounded-full"></div>
+                <h2 class="text-lg font-semibold text-slate-800">作业数据表与加工队列</h2>
+            </div>
+            
+            <!-- 表格容器，移除固定高度，允许自然展开 -->
+            <div class="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                <div class="overflow-x-auto custom-scrollbar">
+                    <table class="w-full text-sm text-left text-slate-600 whitespace-nowrap">
+                        <thead class="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
+                            <tr>
+                                <th scope="col" class="px-4 py-3 text-center">顺序</th>
+                                <th scope="col" class="px-4 py-3">作业</th>
+                                <th scope="col" class="px-4 py-3 text-center">M1耗时 <span class="lowercase italic">(a)</span></th>
+                                <th scope="col" class="px-4 py-3 text-center">M2耗时 <span class="lowercase italic">(b)</span></th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            <tr v-for="(job, index) in currentSequence" :key="job.id" 
+                                :class="[
+                                    'transition-all duration-300',
+                                    index === currentStep - 1 ? 'bg-indigo-50/70 border-l-4 border-l-indigo-500 shadow-inner' : 'border-l-4 border-l-transparent',
+                                    index < currentStep - 1 ? 'bg-slate-50 text-slate-400 opacity-60' : '',
+                                    index >= currentStep ? 'bg-white hover:bg-slate-50' : ''
+                                ]">
+                                <td class="px-4 py-3.5 text-center font-mono font-medium">{{ index + 1 }}</td>
+                                <td class="px-4 py-3.5 font-bold flex items-center gap-2">
+                                    <span class="w-3 h-3 rounded-full shadow-sm" :style="{ backgroundColor: job.color }"></span>
+                                    {{ job.name }}
+                                </td>
+                                <td class="px-4 py-3.5 text-center font-mono bg-slate-50/50">{{ job.a }}</td>
+                                <td class="px-4 py-3.5 text-center font-mono bg-slate-50/50">{{ job.b }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 当前步骤解读面板 -->
+            <div class="bg-blue-50 border border-blue-100 rounded-xl p-5 shadow-sm flex-grow">
+                <h3 class="text-sm font-bold text-blue-800 uppercase tracking-wider mb-3 flex items-center">
+                    <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    实时逻辑解析
+                </h3>
+                <div v-if="currentStep === 0" class="text-blue-600/80 italic text-sm leading-relaxed">
+                    初始化完成。请点击右上角 <span class="font-semibold text-blue-700">“单步推演”</span> 按钮，开始将作业投入流水线...
+                </div>
+                <div v-else class="text-slate-700 space-y-3 text-sm">
+                    <p class="font-semibold text-base flex items-center gap-2">
+                        正在调度：
+                        <span class="px-2 py-0.5 rounded text-white shadow-sm" :style="{ backgroundColor: currentActiveJob.color }">
+                            {{ currentActiveJob.name }}
+                        </span>
+                    </p>
+                    <div class="space-y-2 bg-white/60 p-3 rounded-lg border border-blue-100/50">
+                        <p>
+                            <span class="font-semibold text-indigo-700">1. M1 阶段：</span> 
+                            在时刻 <span class="font-mono font-bold">{{ stepDetails.m1Start }}</span> 进入 M1，
+                            耗时 <span class="font-mono">{{ currentActiveJob.a }}</span>，
+                            于时刻 <span class="font-mono font-bold">{{ stepDetails.m1End }}</span> 完成。
+                        </p>
+                        <p>
+                            <span class="font-semibold text-emerald-700">2. 衔接与等待：</span> 
+                            M2 处理完上一作业是在时刻 <span class="font-mono">{{ stepDetails.m2PrevEnd }}</span>。
+                            <span v-if="stepDetails.idleTime > 0" class="block mt-1 text-red-600 font-medium bg-red-50 p-1.5 rounded border border-red-100">
+                                ⚠️ M1 太慢或交接不畅，导致 M2 被迫停机等待了 {{ stepDetails.idleTime }} 个时间单位！
+                            </span>
+                            <span v-else class="block mt-1 text-emerald-600 font-medium bg-emerald-50 p-1.5 rounded border border-emerald-100">
+                                ✓ 无缝衔接。M2 前置任务已清空，无需等待。
+                            </span>
+                        </p>
+                        <p>
+                            <span class="font-semibold text-purple-700">3. M2 阶段：</span> 
+                            M2 于时刻 <span class="font-mono font-bold">{{ stepDetails.m2Start }}</span> 开始加工，
+                            耗时 <span class="font-mono">{{ currentActiveJob.b }}</span>，
+                            于时刻 <span class="font-mono font-bold">{{ stepDetails.m2End }}</span> 完成。
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：甘特图可视化区域 -->
+        <div class="lg:col-span-8 flex flex-col">
+            <div class="flex flex-col sm:flex-row sm:justify-between sm:items-end mb-4 gap-3">
+                <div class="flex items-center space-x-2">
+                    <div class="w-1.5 h-6 bg-emerald-500 rounded-full"></div>
+                    <h2 class="text-lg font-semibold text-slate-800">动态甘特图 (Gantt Chart)</h2>
+                </div>
+                <!-- Cmax 统计牌 -->
+                <div class="px-4 py-2 bg-slate-800 text-white rounded-lg shadow-md flex items-center space-x-3">
+                    <span class="text-sm text-slate-300">最大完工时间 $C_{max}$ :</span>
+                    <span class="text-2xl font-bold font-mono tracking-wider">{{ currentCmax }}</span>
+                </div>
+            </div>
+            
+            <!-- Canvas 容器：使用 ResizeObserver 监听，实现完美响应式 -->
+            <div ref="canvasContainer" class="w-full h-[360px] md:h-[420px] bg-white border border-slate-200 rounded-xl shadow-inner relative overflow-hidden">
+                <canvas ref="canvasEl" class="absolute inset-0 w-full h-full block"></canvas>
+            </div>
+
+            <!-- 图例说明 -->
+            <div class="flex flex-wrap items-center gap-4 mt-4 text-sm text-slate-500 bg-white p-3 rounded-lg border border-slate-100">
+                <span class="font-medium text-slate-700 mr-2">图例：</span>
+                <div class="flex items-center"><div class="w-4 h-4 rounded border border-slate-300 idle-pattern mr-2"></div> M2 停机空闲区 (Idle)</div>
+                <div class="flex items-center">
+                    <svg class="w-4 h-4 text-red-500 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m0 0l-4-4m4 4l4-4"></path></svg> 
+                    当前完工时间线
+                </div>
+                <div class="flex items-center"><div class="w-4 h-4 rounded border border-indigo-200 bg-indigo-50 mr-2"></div> 加工执行期</div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, computed, watch, onMounted, onBeforeUnmount } = Vue;
+
+    createApp({
+        setup() {
+            // 定义作业数据：复杂的 6 个作业案例
+            const rawJobs = [
+                { id: 1, name: 'J1', a: 3, b: 6, color: '#ef4444' }, // 红色
+                { id: 2, name: 'J2', a: 5, b: 2, color: '#f97316' }, // 橙色
+                { id: 3, name: 'J3', a: 8, b: 4, color: '#eab308' }, // 黄色
+                { id: 4, name: 'J4', a: 2, b: 7, color: '#22c55e' }, // 绿色
+                { id: 5, name: 'J5', a: 6, b: 6, color: '#3b82f6' }, // 蓝色
+                { id: 6, name: 'J6', a: 4, b: 8, color: '#8b5cf6' }  // 紫色
+            ];
+
+            const currentStrategy = ref('sequential');
+            const currentStep = ref(0);
+            
+            // DOM 引用
+            const canvasContainer = ref(null);
+            const canvasEl = ref(null);
+            const canvasCtx = ref(null);
+            let resizeObserver = null;
+
+            // 根据策略计算顺序
+            const currentSequence = computed(() => {
+                let seq = [...rawJobs];
+                if (currentStrategy.value === 'johnson') {
+                    // Johnson 法则逻辑
+                    const N1 = seq.filter(j => j.a < j.b).sort((x, y) => x.a - y.a); // N1按 a 升序
+                    const N2 = seq.filter(j => j.a >= j.b).sort((x, y) => y.b - x.b); // N2按 b 降序
+                    return [...N1, ...N2];
+                }
+                return seq; // 默认原序
+            });
+
+            // 存储每一步调度后的时间戳结果
+            const scheduleResult = ref([]);
+            
+            const isFinished = computed(() => currentStep.value >= currentSequence.value.length);
+            const currentCmax = computed(() => {
+                if (scheduleResult.value.length === 0) return 0;
+                return scheduleResult.value[scheduleResult.value.length - 1].m2.end;
+            });
+
+            const currentActiveJob = computed(() => {
+                if (currentStep.value === 0) return null;
+                return currentSequence.value[currentStep.value - 1];
+            });
+
+            const stepDetails = computed(() => {
+                if (currentStep.value === 0) return {};
+                const res = scheduleResult.value[currentStep.value - 1];
+                const prevM2End = currentStep.value > 1 ? scheduleResult.value[currentStep.value - 2].m2.end : 0;
+                return {
+                    m1Start: res.m1.start,
+                    m1End: res.m1.end,
+                    m2PrevEnd: prevM2End,
+                    m2Start: res.m2.start,
+                    m2End: res.m2.end,
+                    idleTime: res.idle.end - res.idle.start
+                };
+            });
+
+            const reset = () => {
+                currentStep.value = 0;
+                scheduleResult.value = [];
+                drawCanvas();
+            };
+
+            const calculateNextStep = () => {
+                const jobIndex = currentStep.value;
+                const job = currentSequence.value[jobIndex];
+                
+                let m1Start = 0;
+                let m2PrevEnd = 0;
+
+                if (jobIndex > 0) {
+                    const prevJob = scheduleResult.value[jobIndex - 1];
+                    m1Start = prevJob.m1.end;
+                    m2PrevEnd = prevJob.m2.end;
+                }
+
+                const m1End = m1Start + job.a;
+                // M2的开始时间取决于：M1是否交货，以及M2自己是否忙完
+                const m2Start = Math.max(m1End, m2PrevEnd); 
+                const m2End = m2Start + job.b;
+
+                scheduleResult.value.push({
+                    job: job,
+                    m1: { start: m1Start, end: m1End },
+                    m2: { start: m2Start, end: m2End },
+                    idle: { start: m2PrevEnd, end: m2Start } // 计算空闲等待的时间段
+                });
+            };
+
+            const stepForward = () => {
+                if (!isFinished.value) {
+                    calculateNextStep();
+                    currentStep.value++;
+                    drawCanvas();
+                }
+            };
+
+            // Canvas 响应式缩放与绘制
+            const updateCanvasSize = (logicalWidth, logicalHeight) => {
+                if (!canvasEl.value) return;
+                // 动态获取设备像素比，防止高清屏模糊
+                const dpr = window.devicePixelRatio || 1;
+                canvasEl.value.width = logicalWidth * dpr;
+                canvasEl.value.height = logicalHeight * dpr;
+                canvasCtx.value = canvasEl.value.getContext('2d');
+                canvasCtx.value.scale(dpr, dpr);
+            };
+
+            const drawCanvas = () => {
+                if (!canvasCtx.value || !canvasContainer.value) return;
+                const ctx = canvasCtx.value;
+                // 获取逻辑尺寸进行绘图
+                const width = canvasContainer.value.clientWidth;
+                const height = canvasContainer.value.clientHeight;
+
+                ctx.clearRect(0, 0, width, height);
+
+                // 布局参数
+                const paddingX = 60; // 左右留白
+                const paddingY = 40; // 上下留白
+                const trackHeight = Math.min(80, (height - paddingY * 2) / 2.5); // 自适应轨道高度
+                const trackGap = Math.min(60, trackHeight * 0.8);
+                const m1Y = paddingY;
+                const m2Y = paddingY + trackHeight + trackGap;
+                
+                // 计算理论最大时间以固定比例尺，避免画面跳动
+                // sum(a) + sum(b) 绝对大于任何情况下的 Cmax
+                const absoluteMaxTime = currentSequence.value.reduce((acc, j) => acc + j.a + j.b, 0); 
+                // 让最右侧稍微留点余地
+                const scaleX = (width - paddingX * 2) / (absoluteMaxTime * 0.75); 
+
+                // --- 1. 绘制机器背景轨道与标签 ---
+                ctx.fillStyle = '#f1f5f9';
+                ctx.fillRect(paddingX, m1Y, width - paddingX * 2, trackHeight);
+                ctx.fillRect(paddingX, m2Y, width - paddingX * 2, trackHeight);
+                
+                // 轨道边框
+                ctx.strokeStyle = '#e2e8f0';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(paddingX, m1Y, width - paddingX * 2, trackHeight);
+                ctx.strokeRect(paddingX, m2Y, width - paddingX * 2, trackHeight);
+
+                // 机器文本标签
+                ctx.fillStyle = '#334155';
+                ctx.font = 'bold 20px sans-serif';
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('M1', paddingX - 15, m1Y + trackHeight / 2);
+                ctx.fillText('M2', paddingX - 15, m2Y + trackHeight / 2);
+
+                // 绘制底部时间轴刻度线
+                const axisY = height - 20;
+                ctx.beginPath();
+                ctx.moveTo(paddingX, axisY);
+                ctx.lineTo(width - paddingX, axisY);
+                ctx.strokeStyle = '#94a3b8';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // --- 2. 绘制数据块 ---
+                for (let i = 0; i < scheduleResult.value.length; i++) {
+                    const res = scheduleResult.value[i];
+                    
+                    // M1 加工块
+                    drawBlock(ctx, paddingX + res.m1.start * scaleX, m1Y, (res.m1.end - res.m1.start) * scaleX, trackHeight, res.job.color, res.job.name, res.job.a);
+
+                    // M2 停机空闲区 (Idle Time)
+                    if (res.idle.end > res.idle.start) {
+                        drawIdleBlock(ctx, paddingX + res.idle.start * scaleX, m2Y, (res.idle.end - res.idle.start) * scaleX, trackHeight);
+                    }
+
+                    // M2 加工块
+                    drawBlock(ctx, paddingX + res.m2.start * scaleX, m2Y, (res.m2.end - res.m2.start) * scaleX, trackHeight, res.job.color, res.job.name, res.job.b);
+                    
+                    // 绘制 M1 到 M2 的虚线引导线 (交接提示)
+                    ctx.beginPath();
+                    ctx.setLineDash([4, 4]);
+                    ctx.moveTo(paddingX + res.m1.end * scaleX, m1Y + trackHeight);
+                    ctx.lineTo(paddingX + res.m2.start * scaleX, m2Y);
+                    ctx.strokeStyle = '#cbd5e1';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+
+                // --- 3. 绘制当前进度指示器与刻度 ---
+                if (currentStep.value > 0) {
+                    const currentMaxTime = scheduleResult.value[currentStep.value - 1].m2.end;
+                    const lineX = paddingX + currentMaxTime * scaleX;
+                    
+                    // 红色垂直进度线
+                    ctx.beginPath();
+                    ctx.setLineDash([6, 4]);
+                    ctx.moveTo(lineX, paddingY - 15);
+                    ctx.lineTo(lineX, axisY);
+                    ctx.strokeStyle = '#ef4444';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+
+                    // 时间刻度文本与背景框
+                    ctx.fillStyle = '#ef4444';
+                    ctx.beginPath();
+                    ctx.roundRect(lineX - 16, axisY + 4, 32, 20, 4);
+                    ctx.fill();
+                    
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 12px font-mono';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(currentMaxTime, lineX, axisY + 14);
+                } else {
+                    // 初始 0 刻度
+                    ctx.fillStyle = '#64748b';
+                    ctx.font = '14px font-mono';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    ctx.fillText('0', paddingX, axisY + 5);
+                }
+            };
+
+            // 辅助函数：绘制彩色作业方块
+            const drawBlock = (ctx, x, y, w, h, color, text, duration) => {
+                // 主体颜色与微小渐变效果
+                const gradient = ctx.createLinearGradient(x, y, x, y + h);
+                gradient.addColorStop(0, color);
+                // 使用一点透明度模拟高光
+                ctx.fillStyle = color;
+                
+                // 绘制带圆角的方块
+                ctx.beginPath();
+                ctx.roundRect(x, y, w, h, 6);
+                ctx.fill();
+                
+                // 外边框
+                ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(x, y, w, h);
+
+                // 阴影提升立体感
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+                ctx.shadowBlur = 6;
+                ctx.shadowOffsetY = 3;
+                // 为了不影响文字，重置阴影
+                
+                // 文字绘制
+                if (w > 20) {
+                    ctx.shadowColor = 'transparent';
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 14px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    
+                    // 判断宽度是否足够显示全部文字
+                    if (w > 35) {
+                        ctx.fillText(text, x + w / 2, y + h / 2 - 8);
+                        ctx.font = '11px sans-serif';
+                        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                        ctx.fillText(`t=${duration}`, x + w / 2, y + h / 2 + 10);
+                    } else {
+                        ctx.fillText(text, x + w / 2, y + h / 2); // 极窄时只显示名称
+                    }
+                }
+            };
+
+            // 辅助函数：绘制带斜纹的空闲区域
+            const drawIdleBlock = (ctx, x, y, w, h) => {
+                // 底色
+                ctx.fillStyle = '#f1f5f9'; 
+                ctx.beginPath();
+                ctx.rect(x, y, w, h);
+                ctx.fill();
+                
+                // 绘制斜线纹理
+                ctx.save();
+                ctx.clip(); 
+                ctx.strokeStyle = '#cbd5e1';
+                ctx.lineWidth = 2.5;
+                for (let i = -h; i < w + h; i += 10) {
+                    ctx.beginPath();
+                    ctx.moveTo(x + i, y);
+                    ctx.lineTo(x + i + h, y + h);
+                    ctx.stroke();
+                }
+                ctx.restore();
+
+                // 边框
+                ctx.strokeStyle = '#94a3b8';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 2]);
+                ctx.strokeRect(x, y, w, h);
+                ctx.setLineDash([]);
+
+                // 提示文字 (宽度足够时)
+                if (w > 45) {
+                    ctx.fillStyle = '#64748b';
+                    ctx.font = 'italic bold 12px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('等待', x + w / 2, y + h / 2);
+                }
+            };
+
+            onMounted(() => {
+                // 使用 ResizeObserver 实现绝佳的响应式 Canvas
+                resizeObserver = new ResizeObserver(entries => {
+                    for (let entry of entries) {
+                        const { width, height } = entry.contentRect;
+                        if (width > 0 && height > 0) {
+                            updateCanvasSize(width, height);
+                            drawCanvas();
+                        }
+                    }
+                });
+                if (canvasContainer.value) {
+                    resizeObserver.observe(canvasContainer.value);
+                }
+            });
+
+            onBeforeUnmount(() => {
+                if (resizeObserver && canvasContainer.value) {
+                    resizeObserver.unobserve(canvasContainer.value);
+                }
+            });
+
+            return {
+                currentStrategy, currentStep, currentSequence, isFinished, 
+                currentCmax, currentActiveJob, stepDetails,
+                canvasContainer, canvasEl,
+                stepForward, reset
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>

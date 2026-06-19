@@ -33,7 +33,7 @@
         const calcWeight = (p1, p2, p3) => dist(p1, p2) + dist(p2, p3) + dist(p3, p1);
 
         const App = () => {
-            const N = 6; // 顶点数量（六边形比较合适，既复杂又不至于状态爆炸）
+            const N = 6; // 顶点数量
             const canvasRef = useRef(null);
             
             // 状态
@@ -46,7 +46,6 @@
             const vertices = useMemo(() => {
                 const pts = [];
                 const R = 150;
-                // 从顶部开始，逆时针
                 for (let i = 0; i < N; i++) {
                     const angle = -Math.PI / 2 + (2 * Math.PI * i) / N;
                     pts.push({ x: R * Math.cos(angle), y: R * Math.sin(angle), id: i });
@@ -168,12 +167,9 @@
                 ctx.clearRect(0, 0, width, height);
 
                 const step = steps[currentStepIndex];
-
-                // 将逻辑坐标转为屏幕坐标
                 const mapPt = (pt) => ({ x: pt.x + cx, y: pt.y + cy });
                 const screenVertices = vertices.map(mapPt);
 
-                // 辅助函数：绘制多边形
                 const drawPoly = (pts, fillColor, strokeColor, lineWidth = 2) => {
                     if(pts.length === 0) return;
                     ctx.beginPath();
@@ -184,32 +180,24 @@
                     if (strokeColor) { ctx.strokeStyle = strokeColor; ctx.lineWidth = lineWidth; ctx.stroke(); }
                 };
 
-                // 1. 如果有高亮子多边形区域 (正在求解 i 到 j)
                 if (step.type === 'START_CELL' || step.type === 'EVAL_K' || step.type === 'FINISH_CELL') {
                     const { i, j } = step;
                     const subPolyPts = [];
                     for(let v=i; v<=j; v++) subPolyPts.push(screenVertices[v]);
-                    drawPoly(subPolyPts, 'rgba(59, 130, 246, 0.1)', null); // 浅蓝色背景
+                    drawPoly(subPolyPts, 'rgba(59, 130, 246, 0.1)', null);
                 }
 
-                // 2. 如果正在评估某个 k
                 if (step.type === 'EVAL_K') {
                     const { i, j, k } = step;
-                    // 绘制左子多边形
                     const leftPts = []; for(let v=i; v<=k; v++) leftPts.push(screenVertices[v]);
                     drawPoly(leftPts, 'rgba(147, 197, 253, 0.4)', null);
-                    // 绘制右子多边形
                     const rightPts = []; for(let v=k; v<=j; v++) rightPts.push(screenVertices[v]);
                     drawPoly(rightPts, 'rgba(167, 243, 208, 0.4)', null);
-                    
-                    // 绘制当前考察的三角形
                     drawPoly([screenVertices[i], screenVertices[k], screenVertices[j]], 'rgba(253, 224, 71, 0.6)', '#eab308', 2);
                 }
 
-                // 3. 绘制基础边框
                 drawPoly(screenVertices, null, '#374151', 3);
 
-                // 4. 绘制已确定的弦 (DONE 状态)
                 if (step.type === 'DONE' && step.chords) {
                     ctx.strokeStyle = '#2563eb';
                     ctx.lineWidth = 2;
@@ -221,7 +209,6 @@
                     });
                 }
 
-                // 5. 绘制顶点
                 screenVertices.forEach((pt, i) => {
                     ctx.beginPath();
                     ctx.arc(pt.x, pt.y, 16, 0, 2 * Math.PI);
@@ -238,11 +225,9 @@
                     ctx.fillText(`v${i}`, pt.x, pt.y);
                 });
 
-                // 6. 连线标注（如果是 EVAL_K）
                 if(step.type === 'EVAL_K') {
                     ctx.fillStyle = '#b45309';
                     ctx.font = 'bold 14px sans-serif';
-                    // 简单在中心下方显示
                     ctx.fillText(`正在验证 k=${step.k}`, cx, height - 30);
                 }
 
@@ -253,26 +238,34 @@
             const step = steps[currentStepIndex];
             const currentTable = step.table;
 
-            // 获取表格单元格的 CSS 类
+            // 修复高亮逻辑的单元格样式计算函数
             const getCellClass = (r, c) => {
                 let base = "border p-2 text-center w-16 h-12 relative text-sm ";
                 if (c < r) return base + "bg-gray-100 text-gray-300"; // 下三角无用
                 if (c === r) return base + "bg-gray-200 text-gray-400"; // 对角线无用
-                if (c === r + 1) return base + "bg-white text-gray-800"; // Base case
                 
-                if (currentTable[r][c] === Infinity) base += "bg-white text-transparent ";
-                else base += "bg-white text-gray-800 ";
-
-                if (step.type === 'EVAL_K' || step.type === 'START_CELL' || step.type === 'FINISH_CELL') {
-                    if (r === step.i && c === step.j) base += "highlight-calc font-bold";
+                // 统一设定上三角区域的基础背景与文本颜色（包含 c === r + 1 的基础情况）
+                if (currentTable[r][c] === Infinity) {
+                    base += "bg-white text-transparent ";
+                } else {
+                    base += "bg-white text-gray-800 ";
                 }
+
+                // 样式叠加 1：当前正在计算的目标格子 [i][j] 设为黄色
+                if (step.type === 'EVAL_K' || step.type === 'START_CELL' || step.type === 'FINISH_CELL') {
+                    if (r === step.i && c === step.j) base += "highlight-calc font-bold ";
+                }
+
+                // 样式叠加 2：当前计算依赖的左子树区间 [i][k] 与右子树区间 [k][j] 设为蓝色
                 if (step.type === 'EVAL_K') {
                     if ((r === step.i && c === step.k) || (r === step.k && c === step.j)) {
-                        base += "highlight-read font-bold";
+                        base += "highlight-read font-bold ";
                     }
                 }
+
+                // 样式叠加 3：整体计算完成后，将非基础状态的有效结果格子设为绿色
                 if (step.type === 'DONE' && currentTable[r][c] !== Infinity && c > r+1) {
-                     base += "highlight-done";
+                     base += "highlight-done ";
                 }
                 return base;
             };
@@ -300,7 +293,7 @@
 
                     {/* Main Content */}
                     <div className="flex flex-1 overflow-hidden">
-                        {/* Left Side: Canvas & Description */}
+                        {/* Left Side */}
                         <div className="w-1/2 border-r border-gray-200 flex flex-col bg-gray-50">
                             <div className="p-4 bg-white border-b border-gray-200 h-32 shrink-0 flex flex-col justify-center">
                                 <h2 className="text-sm font-semibold text-gray-500 mb-1 uppercase tracking-wider">状态说明 {currentStepIndex + 1} / {steps.length}</h2>
@@ -316,7 +309,7 @@
                             </div>
                         </div>
 
-                        {/* Right Side: DP Table */}
+                        {/* Right Side */}
                         <div className="w-1/2 flex flex-col bg-white">
                             <div className="p-4 border-b border-gray-200 h-16 shrink-0 flex items-center bg-gray-50">
                                 <h2 className="text-lg font-bold text-gray-700">状态表 dp[i][j]</h2>

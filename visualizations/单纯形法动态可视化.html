@@ -6,7 +6,7 @@
     <title>单纯形法动态可视化 (Simplex Method)</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script crossorigin src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { margin: 0; padding: 0; background-color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; }
@@ -52,7 +52,7 @@
                 pivotCol: 2, // Index in tableau (x2 col)
                 tableau: [
                     ["基变量", "x1", "x2", "s1", "s2", "s3", "常数项(RHS)", "比值测试(Ratio)"],
-                    ["s1", "1", "0", "1", "0", "0", "4", "4 / 0 = ∞"],
+                    ["s1", "1", "0", "1", "0", "0", "4", "忽略 (系数为0)"],
                     ["s2", "0", "2", "0", "1", "0", "12", "12 / 2 = 6 (最小)"],
                     ["s3", "3", "2", "0", "0", "1", "18", "18 / 2 = 9"],
                     ["Z", "-3", "-5", "0", "0", "0", "0", ""]
@@ -87,7 +87,7 @@
                 tableau: [
                     ["基变量", "x1", "x2", "s1", "s2", "s3", "常数项(RHS)", "比值测试(Ratio)"],
                     ["s1", "1", "0", "1", "0", "0", "4", "4 / 1 = 4"],
-                    ["x2", "0", "1", "0", "0.5", "0", "6", "6 / 0 = ∞"],
+                    ["x2", "0", "1", "0", "0.5", "0", "6", "忽略 (系数为0)"],
                     ["s3", "3", "0", "0", "-1", "1", "6", "6 / 3 = 2 (最小)"],
                     ["Z", "-3", "0", "0", "2.5", "0", "30", ""]
                 ],

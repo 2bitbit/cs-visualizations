@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>分硬币最小化差值问题 - 含有相同面值硬币的 DP 可视化</title>
+    <!-- 引入 Tailwind CSS 辅助排版与高级 UI 呈现 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Google Inter 字体 -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- 引入 React 与 ReactDOM (CDN 生产环境版本) -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- 引入 Babel 进行实时 JSX 编译 -->
+    <script crossorigin src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+    
+    <style>
+        body { 
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #f8fafc; 
+        }
+        /* 隐藏滚动条但保留功能 */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        /* 平滑过渡效果 */
+        .cell-transition { 
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
+        }
+        .text-glow {
+            text-shadow: 0 0 10px rgba(99, 102, 241, 0.2);
+        }
+    </style>
+</head>
+<body class="overflow-x-hidden text-slate-800">
+
+    <div id="root" class="w-full min-h-screen flex flex-col"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // 默认预设数据
+        const PRESETS = [
+            { name: "经典重复 [2, 2, 3, 5]", coins: [2, 2, 3, 5] },
+            { name: "对称相同 [2, 2, 3, 3]", coins: [2, 2, 3, 3] },
+            { name: "高频重复 [1, 1, 1, 2]", coins: [1, 1, 1, 2] },
+            { name: "无重复硬币 [2, 3, 5, 6]", coins: [2, 3, 5, 6] }
+        ];
+
+        // 根据硬币生成所有正向DP和反向回溯的完整推演序列
+        function generateSteps(coins) {
+            const steps = [];
+            const n = coins.length;
+            const totalSum = coins.reduce((a, b) => a + b, 0);
+            const target = Math.floor(totalSum / 2);
+            
+            // 初始化 (n + 1) * (target + 1) 的 DP 二维表 (存储布尔值)
+            const dp = Array(n + 1).fill(null).map(() => Array(target + 1).fill(false));
+            
+            // 阶段标记说明：
+            // "INIT" - 初始基础条件
+            // "INTRO" - 引入某个具体硬币行
+            // "CALC" - 正在决策单个单元格
+            // "CALC_DONE" - 该单元格决策完毕
+            // "FINISH_TABLE" - 正向DP表格完全填好，寻找最佳背包容量
+            // "BACKTRACK" - 回溯路径中
+            // "SUCCESS" - 分割方案最终呈现
+
+            // Step 0: 初始状态 (不选任何硬币)
+            dp[0][0] = true;
+            steps.push({
+                phase: "INIT",
+                dpState: JSON.parse(JSON.stringify(dp)),
+                activeRow: 0,
+                activeCol: 0,
+                sourceTopCol: -1,
+                sourceLeftCol: -1,
+                isChecking: false,
+                msgTitle: "🎯 动态规划初始化（第 0 行）",
+                msgDesc: "没有使用任何硬币时：\n• 凑出总和为 0 的方案是唯一的，且必定可行 (True)。\n• 其余所有大于 0 的容量在无硬币可用时都是不可能拼凑的 (False)。",
+                backtrackPath: [],
+                selectedCoins: []
+            });
+
+            // 遍历每个硬币，我们将其作为唯一的硬币对象进行处理
+            for (let i = 1; i <= n; i++) {
+                const coinVal = coins[i - 1];
+                
+                // 宣告新行处理
+                steps.push({
+                    phase: "INTRO",
+                    dpState: JSON.parse(JSON.stringify(dp)),
+                    activeRow: i,
+                    activeCol: -1,
+                    sourceTopCol: -1,
+                    sourceLeftCol: -1,
+                    isChecking: false,
+                    msgTitle: `🪙 准备引入第 #${i} 枚硬币`,
+                    msgDesc: `当前硬币面值为：${coinVal}。\n请注意：即使此硬币的面值与之前的硬币相同，它也是一个独立的实体（即硬币 #${i}）。我们将依次排查从背包容量 0 至最大限制容量 ${target} 的拼凑可能性。`,
+                    backtrackPath: [],
+                    selectedCoins: []
+                });
+
+                for (let j = 0; j <= target; j++) {
+                    const fromTop = dp[i - 1][j]; // 方案1: 不选当前硬币，直接继承前i-1枚的成果
+                    const fromLeft = j >= coinVal ? dp[i - 1][j - coinVal] : false; // 方案2: 选当前硬币
+                    const result = fromTop || fromLeft;
+                    
+                    // 1. 运算中的状态 (高亮显示依赖格)
+                    let checkDesc = `正在评估 dp[${i}][${j}] (使用前 ${i} 枚硬币能否拼出和为 ${j})：\n\n`;
+                    checkDesc += `👉 选项 A（不选当前硬币 #${i}）: 直接继承正上方单元格的结果 dp[${i-1}][${j}] = ${fromTop ? "🟢 True (可行)" : "🔴 False (不可行)"}\n`;
+                    if (j >= coinVal) {
+                        checkDesc += `👉 选项 B（选入当前硬币 #${i} [面值: ${coinVal}]）: 检查剩余容量拼凑情况 dp[${i-1}][${j - coinVal}] = ${fromLeft ? "🟢 True (可行)" : "🔴 False (不可行)"}\n`;
+                    } else {
+                        checkDesc += `👉 选项 B（选入当前硬币 #${i}）: 当前容量限制 ${j} 小于硬币面值 ${coinVal}，故在此格子无法放入该硬币。\n`;
+                    }
+                    checkDesc += `\n最终决策: 只要选项 A 或选项 B 任意一个为可行 (True)，当前组合格即为 True。`;
+
+                    steps.push({
+                        phase: "CALC",
+                        dpState: JSON.parse(JSON.stringify(dp)),
+                        activeRow: i,
+                        activeCol: j,
+                        sourceTopCol: j,
+                        sourceLeftCol: j >= coinVal ? j - coinVal : -1,
+                        isChecking: true,
+                        msgTitle: `🔍 决策中：dp[${i}][${j}]`,
+                        msgDesc: checkDesc,
+                        backtrackPath: [],
+                        selectedCoins: []
+                    });
+
+                    // 将计算值写入dp表格
+                    dp[i][j] = result;
+
+                    // 2. 运算完成的状态 (展现决策产出)
+                    let doneDesc = `更新完成！dp[${i}][${j}] ＝ ${result ? "🟢 True" : "🔴 False"}\n\n`;
+                    if (result) {
+                        if (fromTop && fromLeft) {
+                            doneDesc += `多路通达：当前位置既可以不选硬币 #${i} (继承前序)，也可以选择硬币 #${i} (配合前序凑出 ${j - coinVal})。均可构成有效解！`;
+                        } else if (fromTop) {
+                            doneDesc += `继承成功：不选硬币 #${i}，依靠前序硬币拼成。`;
+                        } else {
+                            doneDesc += `配对成功：必须选入硬币 #${i}，配合前序拼凑出 ${j - coinVal} 的基础方案达成目标。`;
+                        }
+                    } else {
+                        doneDesc += `无解方案：硬币加入与否均无法在此容量下配对。`;
+                    }
+
+                    steps.push({
+                        phase: "CALC_DONE",
+                        dpState: JSON.parse(JSON.stringify(dp)),
+                        activeRow: i,
+                        activeCol: j,
+                        sourceTopCol: fromTop ? j : -1,
+                        sourceLeftCol: (!fromTop && fromLeft) ? (j - coinVal) : -1,
+                        isChecking: false,
+                        msgTitle: `✅ 状态已锁定: dp[${i}][${j}]`,
+                        msgDesc: doneDesc,
+                        backtrackPath: [],
+                        selectedCoins: []
+                    });
+                }
+            }
+
+            // 全表格构建完毕，寻找最佳结果格
+            let bestSum = target;
+            while (bestSum >= 0 && !dp[n][bestSum]) {
+                bestSum--;
+            }
+
+            steps.push({
+                phase: "FINISH_TABLE",
+                dpState: JSON.parse(JSON.stringify(dp)),
+                activeRow: n,
+                activeCol: bestSum,
+                sourceTopCol: -1,
+                sourceLeftCol: -1,
+                isChecking: false,
+                msgTitle: "🏁 决策矩阵构建完毕！正在寻找最优解",
+                msgDesc: `我们从限制容量上限 $\\lfloor S/2 \\rfloor = ${target}$ 开始向左搜索最后一行的布尔值。\n` +
+                         `发现最大的可行状态为容量：${bestSum} (值为 True)。\n` +
+                         `这意味着：两堆硬币的分配可达到：\n` +
+                         `• 第一堆 (A) 总和 = ${bestSum}\n` +
+                         `• 第二堆 (B) 总和 = ${totalSum} - ${bestSum} = ${totalSum - bestSum}\n` +
+                         `• 两堆硬币面值之差的绝对值最小为：|${totalSum - bestSum} - ${bestSum}| = ${Math.abs(totalSum - 2 * bestSum)}。\n\n` +
+                         `接下来，我们将从 dp[${n}][${bestSum}] 启动「逆向回溯路径」，定位出具体是哪几枚硬币组成了第一堆。`,
+                backtrackPath: [],
+                selectedCoins: []
+            });
+
+            // 逆向回溯推导阶段
+            let currRow = n;
+            let currCol = bestSum;
+            const bPath = [];
+            const chosenIndices = []; // 存放被选中的硬币的原本索引
+
+            while (currRow > 0) {
+                bPath.push([currRow, currCol]);
+                const coinIdx = currRow - 1;
+                const coinVal = coins[coinIdx];
+
+                const canSkip = dp[currRow - 1][currCol]; // 判定是否可以不选此硬币
+                const canChoose = currCol >= coinVal && dp[currRow - 1][currCol - coinVal]; // 判定是否能够选此硬币
+
+                let decisionDesc = "";
+                let nextCol = currCol;
+                let isSelected = false;
+
+                if (canChoose && !canSkip) {
+                    decisionDesc = `⚠️ 不选硬币 #${currRow} (面值 ${coinVal}) 的上方格子为 False。\n因此，我们【必须选入】硬币 #${currRow} 才能凑足当下的和 ${currCol}。`;
+                    nextCol = currCol - coinVal;
+                    isSelected = true;
+                } else if (canSkip && !canChoose) {
+                    decisionDesc = `ℹ️ 选入硬币 #${currRow} (面值 ${coinVal}) 在前方无法构成可行方案。\n因此，我们【不能选入】硬币 #${currRow}，向正上方退步回溯。`;
+                    nextCol = currCol;
+                    isSelected = false;
+                } else if (canSkip && canChoose) {
+                    decisionDesc = `💡 发现两条分叉路线皆行得通！\n为了保持清晰，我们在本演示中做出选择：【选入】硬币 #${currRow} (面值 ${coinVal})，让回溯向左上方偏移移动。`;
+                    nextCol = currCol - coinVal;
+                    isSelected = true;
+                } else {
+                    decisionDesc = `无法定位前序路径，自动选择回退至起始点。`;
+                }
+
+                if (isSelected) {
+                    chosenIndices.push(coinIdx);
+                }
+
+                steps.push({
+                    phase: "BACKTRACK",
+                    dpState: JSON.parse(JSON.stringify(dp)),
+                    activeRow: currRow,
+                    activeCol: currCol,
+                    sourceTopCol: canSkip ? currCol : -1,
+                    sourceLeftCol: canChoose ? currCol - coinVal : -1,
+                    isChecking: false,
+                    msgTitle: `🔙 回溯定位中: 第 #${currRow} 枚硬币的处理`,
+                    msgDesc: `当前状态位于 dp[${currRow}][${currCol}] = True。\n\n${decisionDesc}\n\n${isSelected ? `👈 回溯进入 dp[${currRow-1}][${nextCol}]` : `☝️ 回溯进入 dp[${currRow-1}][${currCol}]`}`,
+                    backtrackPath: [...bPath],
+                    selectedCoins: [...chosenIndices]
+                });
+
+                currCol = nextCol;
+                currRow--;
+            }
+
+            // 回溯收尾，触及基准点
+            bPath.push([0, 0]);
+            
+            // 计算被分入第二堆的硬币
+            const remainingIndices = [];
+            for (let idx = 0; idx < n; idx++) {
+                if (!chosenIndices.includes(idx)) {
+                    remainingIndices.push(idx);
+                }
+            }
+
+            steps.push({
+                phase: "SUCCESS",
+                dpState: JSON.parse(JSON.stringify(dp)),
+                activeRow: 0,
+                activeCol: 0,
+                sourceTopCol: -1,
+                sourceLeftCol: -1,
+                isChecking: false,
+                msgTitle: "🎉 恭喜！完美完成了两堆的最优划分",
+                msgDesc: `回溯已安全回到基点 dp[0][0]，这证明我们的路径完全有效！\n\n` +
+                         `✨ **最优组合分配详情：**\n\n` +
+                         `📦 **第一堆 (总和: ${bestSum})**:\n` +
+                         `${chosenIndices.map(idx => ` • [硬币 #${idx + 1}] 面值为 ${coins[idx]}`).join('\n') || " • (空集)"}\n\n` +
+                         `📦 **第二堆 (总和: ${totalSum - bestSum})**:\n` +
+                         `${remainingIndices.map(idx => ` • [硬币 #${idx + 1}] 面值为 ${coins[idx]}`).join('\n') || " • (空集)"}\n\n` +
+                         `💡 **同面值硬币解答结论**：我们可以看到，即使两个硬币的面值完全一样，在回溯或DP表格推导中，它们也会因为**唯一的硬币序号(如硬币#1, 硬币#2)**而被分派到不同（或相同）的堆中。它们在 0/1 背包模型里被完全作为彼此独立的硬币进行处理，互不冲突！`,
+                backtrackPath: [...bPath],
+                selectedCoins: [...chosenIndices]
+            });
+
+            return steps;
+        }
+
+        function App() {
+            // 输入及配置状态
+            const [customCoinsInput, setCustomCoinsInput] = useState("2, 2, 3, 5");
+            const [coins, setCoins] = useState([2, 2, 3, 5]);
+            const [stepIdx, setStepIdx] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [speed, setSpeed] = useState(600); // 默认步长时间(ms)
+            const [errorMessage, setErrorMessage] = useState("");
+
+            const playRef = useRef(null);
+
+            // 实时生成最新的步骤列表
+            const stepsData = useMemo(() => {
+                return generateSteps(coins);
+            }, [coins]);
+
+            const currentStep = stepsData[stepIdx] || stepsData[0];
+            const totalSum = coins.reduce((a, b) => a + b, 0);
+            const targetCapacity = Math.floor(totalSum / 2);
+
+            const isFirst = stepIdx === 0;
+            const isLast = stepIdx === stepsData.length - 1;
+
+            // 控制器事件函数
+            const handleNext = () => setStepIdx(prev => Math.min(stepsData.length - 1, prev + 1));
+            const handlePrev = () => setStepIdx(prev => Math.max(0, prev - 1));
+            const handleReset = () => {
+                setStepIdx(0);
+                setIsPlaying(false);
+            };
+
+            // 监听自动播放
+            useEffect(() => {
+                if (isPlaying && !isLast) {
+                    playRef.current = setTimeout(() => {
+                        handleNext();
+                    }, speed);
+                } else if (isLast && isPlaying) {
+                    setIsPlaying(false);
+                }
+                return () => clearTimeout(playRef.current);
+            }, [isPlaying, stepIdx, isLast, speed]);
+
+            // 预设点击应用
+            const applyPreset = (presetCoins) => {
+                setIsPlaying(false);
+                setCoins(presetCoins);
+                setCustomCoinsInput(presetCoins.join(", "));
+                setStepIdx(0);
+                setErrorMessage("");
+            };
+
+            // 用户提交自定义输入
+            const handleCustomSubmit = (e) => {
+                e.preventDefault();
+                setIsPlaying(false);
+                const parsed = customCoinsInput
+                    .split(",")
+                    .map(item => parseInt(item.trim(), 10))
+                    .filter(val => !isNaN(val) && val > 0);
+
+                if (parsed.length === 0) {
+                    setErrorMessage("请输入有效的正整数数组！例如: 2, 2, 3, 5");
+                    return;
+                }
+                if (parsed.length > 7) {
+                    setErrorMessage("为了保证可视化布局不发生拥挤，限制硬币数量最大为 7。");
+                    return;
+                }
+                const sum = parsed.reduce((a, b) => a + b, 0);
+                if (Math.floor(sum / 2) > 30) {
+                    setErrorMessage("为了防止背包容量超限导致表格过大，所有硬币的面值总和请不要超过 60。");
+                    return;
+                }
+
+                setErrorMessage("");
+                setCoins(parsed);
+                setStepIdx(0);
+            };
+
+            // 依据当前行、列决定单元格的阶跃式样式变化
+            const getCellStyles = (row, col) => {
+                const step = currentStep;
+                const isCurrentActive = step.activeRow === row && step.activeCol === col;
+                const value = step.dpState[row][col];
+                
+                // 判断此格子是否处于当前的“回溯路径”上
+                const isBacktrackNode = step.backtrackPath.some(item => item[0] === row && item[1] === col);
+
+                // 是否是为当前决策单元格提供依据的源头格子
+                const isSourceTop = (step.activeRow === row + 1) && (step.sourceTopCol === col);
+                const isSourceLeft = (step.activeRow === row + 1) && (step.sourceLeftCol === col);
+
+                let classes = "cell-transition w-12 h-12 rounded-lg flex flex-col items-center justify-center font-bold text-xs border relative shadow-sm ";
+
+                // 核心状态高亮
+                if (isBacktrackNode) {
+                    classes += "bg-indigo-600 border-indigo-700 text-white ring-4 ring-indigo-300 ring-offset-1 z-20 scale-105 shadow-md ";
+                } else if (isCurrentActive) {
+                    if (step.isChecking) {
+                        classes += "bg-amber-400 border-amber-500 text-slate-900 ring-4 ring-amber-200 z-20 scale-110 shadow-lg animate-pulse ";
+                    } else {
+                        classes += "bg-violet-500 border-violet-600 text-white ring-4 ring-violet-200 z-20 scale-110 shadow-lg ";
+                    }
+                } else if (isSourceTop || isSourceLeft) {
+                    classes += "bg-pink-100 border-pink-400 text-pink-800 ring-2 ring-pink-300 z-10 scale-105 ";
+                } else {
+                    // 常规值样式
+                    if (value) {
+                        classes += "bg-emerald-50 border-emerald-300 text-emerald-800 ";
+                    } else {
+                        classes += "bg-white border-slate-200 text-slate-300 ";
+                    }
+                }
+
+                return classes;
+            };
+
+            return (
+                <div className="flex-grow flex flex-col p-4 md:p-6 max-w-7xl mx-auto w-full gap-6">
+                    
+                    {}
+                    {/* 头部面板：标题和说明 */}
+                    <header className="bg-white border border-slate-100 rounded-2xl p-5 md:p-6 shadow-sm flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                        <div>
+                            <div className="flex items-center gap-3">
+                                <span className="bg-indigo-100 text-indigo-700 font-bold px-3 py-1 rounded-full text-xs">动态规划交互课件</span>
+                                <h1 className="text-xl md:text-2xl font-extrabold text-slate-900 tracking-tight">分硬币差值最小化问题</h1>
+                            </div>
+                            <p className="text-slate-500 text-sm mt-1 max-w-2xl">
+                                问题：将硬币分成两堆，使得两堆和的绝对差值最小。
+                                对称性推导证明，问题能完美转化为容量为 <span className="font-semibold text-indigo-600 text-base">⌊Sum/2⌋</span> 的 0/1 背包问题。
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {PRESETS.map((p, idx) => (
+                                <button
+                                    key={idx}
+                                    onClick={() => applyPreset(p.coins)}
+                                    className="px-3 py-1.5 text-xs bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 text-slate-600 hover:text-indigo-700 font-semibold rounded-lg transition-all"
+                                >
+                                    {p.name}
+                                </button>
+                            ))}
+                        </div>
+                    </header>
+
+                    {/* 主工作区布局 */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch flex-grow">
+                        
+                        {}
+                        {/* 左/上边：硬币编辑与程序流程控制器 */}
+                        <div className="lg:col-span-4 flex flex-col gap-6">
+                            
+                            {/* 1. 自定义硬币编辑卡 */}
+                            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
+                                <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-3 flex items-center gap-2">
+                                    ⚙️ 设定并输入硬币
+                                </h2>
+                                <form onSubmit={handleCustomSubmit} className="space-y-3">
+                                    <div>
+                                        <label className="block text-xs text-slate-500 mb-1 font-medium">硬币数组 (英文逗号隔开):</label>
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="text"
+                                                value={customCoinsInput}
+                                                onChange={(e) => setCustomCoinsInput(e.target.value)}
+                                                placeholder="例如: 2, 2, 3, 5"
+                                                className="flex-grow border border-slate-200 px-3 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                                            />
+                                            <button
+                                                type="submit"
+                                                className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs px-4 rounded-xl transition-colors shrink-0"
+                                            >
+                                                生成
+                                            </button>
+                                        </div>
+                                    </div>
+                                    {errorMessage && (
+                                        <p className="text-xs text-rose-500 font-semibold">{errorMessage}</p>
+                                    )}
+                                </form>
+
+                                {/* 显示当前的硬币排列 (圆盘图表形式) */}
+                                <div className="mt-4 pt-4 border-t border-slate-50">
+                                    <div className="text-xs text-slate-400 mb-2 font-medium">当前模型实体列表 (按顺序分配唯一ID)：</div>
+                                    <div className="flex flex-wrap gap-2.5">
+                                        {coins.map((c, idx) => {
+                                            const isSelectedInStep = currentStep.selectedCoins.includes(idx);
+                                            return (
+                                                <div 
+                                                    key={idx} 
+                                                    className={`cell-transition flex flex-col items-center p-1.5 rounded-xl border text-center ${
+                                                        isSelectedInStep 
+                                                            ? 'bg-indigo-50 border-indigo-300 text-indigo-800 scale-105 ring-2 ring-indigo-200' 
+                                                            : 'bg-white border-slate-200 text-slate-700'
+                                                    }`}
+                                                    style={{ minWidth: '4.5rem' }}
+                                                >
+                                                    <div className="text-[9px] font-semibold text-slate-400">硬币 #{idx+1}</div>
+                                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-extrabold text-sm border shadow-sm my-1 ${
+                                                        isSelectedInStep ? 'bg-indigo-600 border-indigo-700 text-white' : 'bg-amber-100 border-amber-300 text-amber-800'
+                                                    }`}>
+                                                        {c}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 2. 自动化控制器 */}
+                            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex flex-col gap-4">
+                                <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center justify-between">
+                                    <span>🎮 推演控制器</span>
+                                    <span className="text-xs text-indigo-600 font-mono">{stepIdx} / {stepsData.length - 1} 步</span>
+                                </h2>
+
+                                {/* 进度条 */}
+                                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                    <div 
+                                        className="bg-indigo-600 h-full rounded-full cell-transition" 
+                                        style={{ width: `${(stepIdx / (stepsData.length - 1)) * 100}%` }}
+                                    ></div>
+                                </div>
+
+                                {/* 控制按钮组合 */}
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        onClick={handlePrev}
+                                        disabled={isFirst}
+                                        className="px-4 py-2 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-slate-50 text-slate-700 rounded-xl font-semibold text-sm border border-slate-200 transition-colors flex items-center justify-center gap-1"
+                                    >
+                                        ← 上一步
+                                    </button>
+                                    <button
+                                        onClick={handleNext}
+                                        disabled={isLast}
+                                        className="px-4 py-2 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-slate-50 text-slate-700 rounded-xl font-semibold text-sm border border-slate-200 transition-colors flex items-center justify-center gap-1"
+                                    >
+                                        下一步 →
+                                    </button>
+                                    <button
+                                        onClick={handleReset}
+                                        className="px-4 py-2 bg-slate-50 hover:bg-rose-50 text-rose-600 rounded-xl font-semibold text-sm border border-slate-200 hover:border-rose-200 transition-colors"
+                                    >
+                                        ↺ 重新开始
+                                    </button>
+                                    <button
+                                        onClick={() => setIsPlaying(!isPlaying)}
+                                        disabled={isLast}
+                                        className={`px-4 py-2 rounded-xl font-bold text-sm text-white transition-all ${
+                                            isPlaying 
+                                                ? 'bg-rose-500 hover:bg-rose-600' 
+                                                : 'bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300'
+                                        }`}
+                                    >
+                                        {isPlaying ? "⏸ 暂停自动" : "▶ 自动播放"}
+                                    </button>
+                                </div>
+
+                                {/* 播放速度调节 */}
+                                <div className="pt-2">
+                                    <label className="flex justify-between text-xs text-slate-500 mb-1 font-medium">
+                                        <span>⚙️ 自动播放间隔</span>
+                                        <span>{speed} 毫秒</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="200"
+                                        max="1500"
+                                        step="100"
+                                        value={speed}
+                                        onChange={(e) => setSpeed(parseInt(e.target.value))}
+                                        className="w-full accent-indigo-600"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {}
+                        {/* 右/下边：DP 矩阵可视化主体与文本详细解析 */}
+                        <div className="lg:col-span-8 flex flex-col gap-6">
+                            
+                            {/* 当前计算状态大解析 */}
+                            <div className="bg-white border border-slate-100 rounded-2xl p-5 md:p-6 shadow-sm flex flex-col justify-start">
+                                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 mb-3">
+                                    <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 animate-pulse"></span>
+                                        {currentStep.msgTitle}
+                                    </h3>
+                                    <div className="text-xs font-mono px-2 py-1 bg-slate-100 text-slate-600 rounded-lg">
+                                        {currentStep.phase === "BACKTRACK" ? "🔁 逆向回溯推演" : currentStep.phase === "SUCCESS" ? "🌟 划分大告成" : "📈 决策表填充"}
+                                    </div>
+                                </div>
+                                <div className="text-slate-600 text-xs md:text-sm leading-relaxed whitespace-pre-wrap font-sans">
+                                    {currentStep.msgDesc}
+                                </div>
+                            </div>
+
+                            {/* 核心 DP 表格区 */}
+                            <div className="bg-white border border-slate-100 rounded-2xl p-5 md:p-6 shadow-sm flex-grow flex flex-col justify-between overflow-hidden relative">
+                                
+                                {/* 图例解释条 */}
+                                <div className="flex flex-wrap gap-4 mb-4 pb-4 border-b border-slate-50 text-[10px] md:text-xs text-slate-500">
+                                    <div className="flex items-center gap-1.5">
+                                        <div className="w-3.5 h-3.5 bg-emerald-50 border border-emerald-300 rounded"></div>
+                                        <span>True (可行)</span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        <div className="w-3.5 h-3.5 bg-white border border-slate-200 rounded"></div>
+                                        <span>False (不可行)</span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        <div className="w-3.5 h-3.5 bg-amber-400 rounded"></div>
+                                        <span>正在处理的决策单元</span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        <div className="w-3.5 h-3.5 bg-pink-100 border border-pink-400 rounded"></div>
+                                        <span>提供决策的基础单元</span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        <div className="w-3.5 h-3.5 bg-indigo-600 border border-indigo-700 rounded"></div>
+                                        <span>回溯最优划分路线</span>
+                                    </div>
+                                </div>
+
+                                {/* 滚动网格容器 */}
+                                <div className="w-full overflow-x-auto no-scrollbar pb-2">
+                                    <table className="mx-auto border-separate border-spacing-1.5">
+                                        <thead>
+                                            <tr>
+                                                <th className="p-1 text-[10px] md:text-xs text-slate-400 font-semibold text-right whitespace-nowrap min-w-[7rem]">
+                                                    硬币对象 \ 背包容量
+                                                </th>
+                                                {Array.from({ length: targetCapacity + 1 }).map((_, j) => (
+                                                    <th key={j} className="w-12 text-center">
+                                                        <div className={`text-xs font-bold py-1 rounded bg-slate-50 text-slate-500 border border-slate-100 ${currentStep.activeCol === j ? 'bg-indigo-100 text-indigo-700 border-indigo-200' : ''}`}>
+                                                            {j}
+                                                        </div>
+                                                    </th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {/* 初始第 0 行 */}
+                                            <tr>
+                                                <td className="p-1">
+                                                    <div className={`text-xs font-semibold px-2 py-1.5 rounded-lg border text-right bg-slate-50 text-slate-400 ${currentStep.activeRow === 0 ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : ''}`}>
+                                                        0 (初始点)
+                                                    </div>
+                                                </td>
+                                                {Array.from({ length: targetCapacity + 1 }).map((_, j) => (
+                                                    <td key={j} className="align-middle">
+                                                        <div className={getCellStyles(0, j)}>
+                                                            <span className="text-[10px] opacity-40">dp[0][{j}]</span>
+                                                            <span className="text-xs">{currentStep.dpState[0][j] ? 'T' : 'F'}</span>
+                                                        </div>
+                                                    </td>
+                                                ))}
+                                            </tr>
+
+                                            {/* 各个硬币的具体行 */}
+                                            {coins.map((c, index) => {
+                                                const r = index + 1;
+                                                const isRowActive = currentStep.activeRow === r;
+                                                return (
+                                                    <tr key={r}>
+                                                        <td className="p-1">
+                                                            <div className={`text-xs font-bold px-2 py-1.5 rounded-lg border text-right transition-all flex flex-col justify-center items-end ${
+                                                                isRowActive 
+                                                                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-sm' 
+                                                                    : 'bg-white text-slate-600 border-slate-100'
+                                                            }`}>
+                                                                <span className="text-[8px] opacity-40 font-mono">硬币 #{r}</span>
+                                                                <span>面值: {c}</span>
+                                                            </div>
+                                                        </td>
+                                                        {Array.from({ length: targetCapacity + 1 }).map((_, j) => {
+                                                            // 为了呈现渐进式加载，后面的单元格如果在当前步还没有被扫到，就隐藏具体数据
+                                                            const hasComputed = (r < currentStep.activeRow) || (r === currentStep.activeRow && j <= currentStep.activeCol);
+                                                            const showData = hasComputed || currentStep.phase === "FINISH_TABLE" || currentStep.phase === "BACKTRACK" || currentStep.phase === "SUCCESS";
+                                                            return (
+                                                                <td key={j} className="align-middle">
+                                                                    <div className={getCellStyles(r, j)}>
+                                                                        <span className="text-[9px] opacity-40 font-mono">dp[{r}][{j}]</span>
+                                                                        <span className="text-xs">
+                                                                            {showData 
+                                                                                ? (currentStep.dpState[r][j] ? 'T' : 'F') 
+                                                                                : ''}
+                                                                        </span>
+                                                                    </div>
+                                                                </td>
+                                                            );
+                                                        })}
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                {/* 表格底下的数值情况总览 */}
+                                <div className="mt-4 pt-4 border-t border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5 text-xs text-slate-500">
+                                    <div className="flex gap-4">
+                                        <div>硬币总数量: <span className="font-semibold text-slate-800">{coins.length}</span></div>
+                                        <div>所有面值总和: <span className="font-semibold text-slate-800">{totalSum}</span></div>
+                                        <div>动态规划目标容量上限: <span className="font-semibold text-slate-800">⌊{totalSum}/2⌋ = {targetCapacity}</span></div>
+                                    </div>
+                                    {currentStep.phase === "SUCCESS" && (
+                                        <div className="bg-emerald-50 text-emerald-700 font-semibold px-3 py-1.5 rounded-xl border border-emerald-100">
+                                            最终最小面值差: {Math.abs(totalSum - 2 * currentStep.selectedCoins.reduce((sum, idx) => sum + coins[idx], 0))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

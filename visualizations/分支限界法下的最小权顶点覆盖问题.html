@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>分支限界法：最小权顶点覆盖</title>
+    <!-- 引入 Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 FontAwesome 图标库 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* 核心要求：增大一点后变小回原样的动态效果 */
+        @keyframes pulseHighlight {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); border-color: #3b82f6; }
+            50% { transform: scale(1.08); box-shadow: 0 0 15px 5px rgba(59, 130, 246, 0.4); border-color: #2563eb; background-color: #eff6ff;}
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); border-color: transparent; }
+        }
+
+        .animate-card-pulse {
+            animation: pulseHighlight 1.5s ease-in-out infinite;
+            border-width: 2px;
+            border-style: solid;
+        }
+
+        /* 自定义滚动条样式，保持界面整洁 */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* 保证文本不可选，提升类似应用的操作体验 */
+        .no-select { user-select: none; }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans h-screen flex flex-col overflow-hidden no-select">
+    <div id="app" class="flex flex-col h-full w-full">
+        <!-- 顶部导航栏 -->
+        <header class="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center z-10 shrink-0">
+            <div>
+                <h1 class="text-xl font-bold"><i class="fa-solid fa-network-wired mr-2"></i>分支限界法求解最小权顶点覆盖</h1>
+                <p class="text-indigo-200 text-sm mt-1">优先队列分支限界法 (LC-BB) 动态图解</p>
+            </div>
+            
+            <!-- 控制面板 -->
+            <div class="flex items-center gap-4 bg-indigo-700 p-2 rounded-lg">
+                <button @click="reset" class="px-3 py-1 hover:bg-indigo-500 rounded transition" title="重置">
+                    <i class="fa-solid fa-rotate-left"></i>
+                </button>
+                <button @click="prevStep" :disabled="currentStepIndex === 0 || isPlaying" class="px-3 py-1 hover:bg-indigo-500 disabled:opacity-50 rounded transition">
+                    <i class="fa-solid fa-backward-step"></i> 上一步
+                </button>
+                <button @click="togglePlay" class="px-4 py-1 bg-green-500 hover:bg-green-400 font-bold rounded shadow transition w-24">
+                    <i :class="isPlaying ? 'fa-solid fa-pause' : 'fa-solid fa-play'"></i> 
+                    {{ isPlaying ? ' 暂停' : ' 自动' }}
+                </button>
+                <button @click="nextStep" :disabled="currentStepIndex === steps.length - 1 || isPlaying" class="px-3 py-1 hover:bg-indigo-500 disabled:opacity-50 rounded transition">
+                    下一步 <i class="fa-solid fa-forward-step"></i>
+                </button>
+
+                <div class="border-l border-indigo-500 h-6 mx-2"></div>
+
+                <div class="flex items-center gap-2 text-sm">
+                    <i class="fa-solid fa-gauge-high"></i>
+                    <input type="range" min="300" max="2500" step="100" v-model="speed" class="w-24 accent-indigo-400" style="direction: rtl;">
+                    <span class="w-12 text-right">{{ speed }}ms</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- 主体内容区：三栏布局 -->
+        <main class="flex-1 flex overflow-hidden p-4 gap-4">
+            
+            <!-- 左侧：图模型可视化区 -->
+            <section class="w-1/3 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden shrink-0">
+                <div class="bg-slate-50 border-b border-slate-200 p-3 font-semibold text-slate-700 flex justify-between items-center shrink-0">
+                    <span><i class="fa-solid fa-circle-nodes mr-2 text-indigo-500"></i>无向图 G(V, E)</span>
+                    <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full">5个顶点, 6条边</span>
+                </div>
+                
+                <div class="flex-1 relative bg-slate-50 flex items-center justify-center">
+                    <!-- Canvas 用于渲染图 -->
+                    <canvas ref="graphCanvas" width="400" height="400" class="block"></canvas>
+                </div>
+
+                <!-- 图例说明 -->
+                <div class="p-4 border-t border-slate-200 bg-white text-sm shrink-0">
+                    <h3 class="font-bold mb-2 text-slate-600">颜色图例</h3>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="flex items-center gap-2"><span class="w-4 h-4 rounded-full bg-slate-300"></span> <span>未决定</span></div>
+                        <div class="flex items-center gap-2"><span class="w-4 h-4 rounded-full bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)]"></span> <span class="font-bold text-green-700">已选择 (加入覆盖)</span></div>
+                        <div class="flex items-center gap-2"><span class="w-4 h-4 rounded-full bg-red-400"></span> <span class="font-bold text-red-700">不选择 (舍弃)</span></div>
+                        <div class="flex items-center gap-2"><span class="w-6 h-1 bg-green-400"></span> <span>已被覆盖的边</span></div>
+                        <div class="col-span-2 text-xs text-slate-500 mt-1">注：节点上的数字格式为 <b>ID (权重)</b></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 中间：优先队列与状态区 -->
+            <section class="w-1/3 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden shrink-0">
+                <div class="bg-slate-50 border-b border-slate-200 p-3 font-semibold text-slate-700 flex justify-between items-center shrink-0">
+                    <span><i class="fa-solid fa-layer-group mr-2 text-indigo-500"></i>算法状态空间</span>
+                    <div class="flex gap-2">
+                        <span class="text-xs font-bold bg-amber-100 text-amber-800 px-2 py-1 rounded border border-amber-200">
+                            全局最优上界 (UB): {{ currentStepData.ub === Infinity ? '∞' : currentStepData.ub }}
+                        </span>
+                    </div>
+                </div>
+                
+                <div class="flex-1 overflow-y-auto p-4 bg-slate-100 flex flex-col gap-4">
+                    
+                    <!-- 当前正在处理的节点 -->
+                    <div v-if="currentStepData.currentState" class="bg-white p-3 rounded-lg border-2 border-indigo-400 shadow-md">
+                        <h3 class="text-xs font-bold text-indigo-600 uppercase mb-2">正在展开的节点</h3>
+                        <div class="flex justify-between items-center">
+                            <div class="text-2xl font-black text-slate-800">{{ currentStepData.currentState.id }}</div>
+                            <div class="text-sm bg-slate-100 px-2 py-1 rounded text-slate-600 font-mono tracking-wider">
+                                {{ formatSelection(currentStepData.currentState.sel) }}
+                            </div>
+                        </div>
+                        <div class="mt-2 text-sm flex justify-between text-slate-500">
+                            <span>当前代价: <b>{{ currentStepData.currentState.cw }}</b></span>
+                            <span class="text-indigo-600">下界(LB): <b>{{ currentStepData.currentState.lb }}</b></span>
+                        </div>
+                    </div>
+
+                    <div v-if="!currentStepData.currentState && currentStepIndex === 0" class="text-center text-slate-400 py-4 text-sm">
+                        点击“下一步”或“自动”开始搜索
+                    </div>
+
+                    <!-- 优先队列列表 -->
+                    <div>
+                        <h3 class="text-xs font-bold text-slate-500 uppercase mb-2 flex justify-between">
+                            <span>优先队列 (按 LB 升序)</span>
+                            <span class="bg-slate-200 px-2 rounded-full">{{ currentStepData.pq.length }}</span>
+                        </h3>
+                        
+                        <div v-if="currentStepData.pq.length === 0" class="text-center py-6 text-slate-400 text-sm border-2 border-dashed border-slate-300 rounded-lg">
+                            队列为空
+                        </div>
+                        
+                        <transition-group name="list" tag="div" class="flex flex-col gap-2">
+                            <div v-for="state in currentStepData.pq" :key="state.id" 
+                                 :class="['bg-white p-3 rounded border shadow-sm transition-all flex justify-between items-center', 
+                                          isCardHighlighted(state.id) ? 'animate-card-pulse z-10' : 'border-slate-200']">
+                                <div>
+                                    <div class="text-lg font-bold text-slate-700">{{ state.id }}</div>
+                                    <div class="text-xs text-slate-400 mt-1">深度: {{ state.depth }}</div>
+                                </div>
+                                <div class="text-center">
+                                    <div class="text-xs font-mono bg-slate-50 px-2 py-1 rounded text-slate-600 tracking-wider">
+                                        {{ formatSelection(state.sel) }}
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="text-sm text-slate-500">LB</div>
+                                    <div class="text-lg font-black text-indigo-600">{{ state.lb }}</div>
+                                </div>
+                            </div>
+                        </transition-group>
+                    </div>
+
+                </div>
+            </section>
+
+            <!-- 右侧：执行日志与详细解析 -->
+            <section class="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden shrink-0">
+                <div class="bg-slate-50 border-b border-slate-200 p-3 font-semibold text-slate-700 shrink-0">
+                    <i class="fa-solid fa-list-check mr-2 text-indigo-500"></i>执行步骤详解
+                </div>
+                
+                <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-3" ref="logContainer">
+                    <div v-for="(log, idx) in logMessages" :key="idx" 
+                         class="p-4 rounded-lg border"
+                         :class="idx === currentStepIndex ? 'bg-indigo-50 border-indigo-300 shadow-sm' : 'bg-white border-slate-100 opacity-60'">
+                        
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="bg-indigo-600 text-white text-xs font-bold px-2 py-0.5 rounded-full">步骤 {{ idx + 1 }}</span>
+                            <span class="font-bold text-slate-700">{{ log.title }}</span>
+                        </div>
+                        
+                        <div class="text-sm text-slate-600 leading-relaxed" v-html="log.desc"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, watch, nextTick } = Vue;
+
+        createApp({
+            setup() {
+                // 图的基础数据定义
+                const N = 5;
+                const nodesData = [
+                    { id: 0, w: 2, label: 'V0', x: 200, y: 50 },
+                    { id: 1, w: 4, label: 'V1', x: 80, y: 160 },
+                    { id: 2, w: 1, label: 'V2', x: 320, y: 160 },
+                    { id: 3, w: 5, label: 'V3', x: 130, y: 320 },
+                    { id: 4, w: 3, label: 'V4', x: 270, y: 320 }
+                ];
+                const edgesData = [
+                    [0, 1], [0, 2], [1, 3], [1, 4], [2, 4], [3, 4]
+                ];
+
+                // 算法预计算生成步骤
+                const steps = [];
+                let stateCounter = 65; // 从 'A' 开始生成状态ID
+
+                function getForcedCost(sel) {
+                    let cost = 0;
+                    let forcedList = [];
+                    for (let i = 0; i < N; i++) {
+                        if (sel[i] === -1) {
+                            let isForced = false;
+                            for (let [u, v] of edgesData) {
+                                if ((u === i && sel[v] === 0) || (v === i && sel[u] === 0)) {
+                                    isForced = true;
+                                    break;
+                                }
+                            }
+                            if (isForced) {
+                                cost += nodesData[i].w;
+                                forcedList.push(i);
+                            }
+                        }
+                    }
+                    return { cost, forcedList };
+                }
+
+                function makeState(sel) {
+                    let cw = 0;
+                    for(let i=0; i<N; i++) if(sel[i] === 1) cw += nodesData[i].w;
+                    let { cost, forcedList } = getForcedCost(sel);
+                    return {
+                        id: String.fromCharCode(stateCounter++),
+                        sel: [...sel],
+                        cw,
+                        lb: cw + cost,
+                        depth: sel.filter(x => x !== -1).length,
+                        forcedList
+                    };
+                }
+
+                function generateAlgorithmSteps() {
+                    let PQ = [];
+                    let UB = Infinity;
+                    let bestSolution = null;
+
+                    // Step 1: 初始化
+                    let root = makeState([-1,-1,-1,-1,-1]);
+                    PQ.push(root);
+                    
+                    steps.push({
+                        title: "初始化",
+                        desc: "初始化根节点 A。没有任何顶点被决定。<br>当前上界 UB = <b>∞</b>。<br>将节点 A 加入优先队列。",
+                        pq: JSON.parse(JSON.stringify(PQ)),
+                        currentState: null,
+                        graphSelection: [...root.sel],
+                        highlightNodes: [],
+                        highlightCards: ['A'],
+                        ub: UB
+                    });
+
+                    while(PQ.length > 0) {
+                        // 按 LB 排序，若 LB 相同则深度优先
+                        PQ.sort((a,b) => a.lb !== b.lb ? a.lb - b.lb : b.depth - a.depth);
+
+                        let curr = PQ.shift();
+                        let v_idx = curr.sel.findIndex(x => x === -1);
+
+                        // 步骤：取出节点
+                        steps.push({
+                            title: `从队列中取出 ${curr.id}`,
+                            desc: `当前队列中 LB 最小的是状态 <b>${curr.id}</b> (LB=${curr.lb})，将其取出准备展开。`,
+                            pq: JSON.parse(JSON.stringify(PQ)),
+                            currentState: JSON.parse(JSON.stringify(curr)),
+                            graphSelection: [...curr.sel],
+                            highlightNodes: v_idx !== -1 ? [v_idx] : [],
+                            highlightCards: [],
+                            ub: UB
+                        });
+
+                        if (v_idx === -1) {
+                            // 叶子节点
+                            let msg = `节点 <b>${curr.id}</b> 是叶子节点，所有顶点已完成决定。<br>这是一个合法的顶点覆盖，总权重为 <b>${curr.cw}</b>。`;
+                            if (curr.cw < UB) {
+                                UB = curr.cw;
+                                bestSolution = [...curr.sel];
+                                msg += `<br><br><span style="color:#22c55e;font-weight:bold;">★ 找到更优解！更新全局上界 UB = ${UB}。</span>`;
+                                
+                                // 剪枝
+                                let originalLen = PQ.length;
+                                PQ = PQ.filter(s => s.lb < UB);
+                                let pruned = originalLen - PQ.length;
+                                if(pruned > 0) {
+                                    msg += `<br>触发剪枝：移除队列中 ${pruned} 个 LB ≥ UB(${UB}) 的状态。`;
+                                }
+                            } else {
+                                msg += `<br>但其权重并不小于当前最优解 UB(${UB})，抛弃。`;
+                            }
+                            
+                            steps.push({
+                                title: `评估完整解 ${curr.id}`,
+                                desc: msg,
+                                pq: JSON.parse(JSON.stringify(PQ)),
+                                currentState: null,
+                                graphSelection: [...curr.sel],
+                                highlightNodes: curr.sel.map((_, i) => i), // 高亮所有
+                                highlightCards: [],
+                                ub: UB
+                            });
+                            continue;
+                        }
+
+                        // 分支展开
+                        let { forcedList } = getForcedCost(curr.sel);
+                        let isVForced = forcedList.includes(v_idx);
+                        
+                        if (isVForced) {
+                            // 强制选择
+                            let sel1 = [...curr.sel];
+                            sel1[v_idx] = 1;
+                            let child = makeState(sel1);
+                            
+                            let msg = `准备对顶点 <b>V${v_idx}</b> 进行决策。<br>由于存在相邻顶点被显式排除（不选），为了覆盖相连的边，<b>V${v_idx} 必须被选择！</b><br>直接生成单一分支状态 <b>${child.id}</b>，其下界 LB = ${child.lb}。`;
+                            
+                            let added = [];
+                            if (child.lb < UB) {
+                                PQ.push(child);
+                                added.push(child.id);
+                                msg += `<br>LB < UB，将 <b>${child.id}</b> 加入队列。`;
+                            } else {
+                                msg += `<br><span style="color:#ef4444">但由于其 LB(${child.lb}) ≥ UB(${UB === Infinity ? '∞' : UB})，该状态被直接剪枝！</span>`;
+                            }
+
+                            steps.push({
+                                title: `强制展开 ${curr.id}`,
+                                desc: msg,
+                                pq: JSON.parse(JSON.stringify(PQ)),
+                                currentState: JSON.parse(JSON.stringify(curr)),
+                                graphSelection: [...curr.sel],
+                                highlightNodes: [v_idx],
+                                highlightCards: added,
+                                ub: UB
+                            });
+                        } else {
+                            // 正常双分支
+                            let sel1 = [...curr.sel]; sel1[v_idx] = 1;
+                            let child1 = makeState(sel1);
+                            
+                            let sel0 = [...curr.sel]; sel0[v_idx] = 0;
+                            let child0 = makeState(sel0);
+
+                            let msg = `对顶点 <b>V${v_idx}</b> 尝试两种决策：<br><br>`;
+                            
+                            msg += `<b>1. <span style="color:#22c55e">选择 V${v_idx}</span></b>: 生成状态 <b>${child1.id}</b>。<br>&nbsp;&nbsp;&nbsp;代价增加 ${nodesData[v_idx].w}，计算得 LB = <b>${child1.lb}</b>。`;
+                            if(child1.lb < UB) msg += " (入队)"; else msg += " (剪枝)";
+                            
+                            msg += `<br><br><b>2. <span style="color:#ef4444">不选 V${v_idx}</span></b>: 生成状态 <b>${child0.id}</b>。<br>&nbsp;&nbsp;&nbsp;不选它会导致其尚未决定的相邻顶点必须被选中，产生强制成本。`;
+                            if(child0.forcedList.length > 0) {
+                                msg += ` 被迫选择: ${child0.forcedList.map(i=>`V${i}(权重${nodesData[i].w})`).join(', ')}。`;
+                            }
+                            msg += `<br>&nbsp;&nbsp;&nbsp;累加得到 LB = 当前权重(${child0.cw}) + 强制成本 = <b>${child0.lb}</b>。`;
+                            if(child0.lb < UB) msg += " (入队)"; else msg += " (剪枝)";
+
+                            let added = [];
+                            if (child1.lb < UB) { PQ.push(child1); added.push(child1.id); }
+                            if (child0.lb < UB) { PQ.push(child0); added.push(child0.id); }
+
+                            steps.push({
+                                title: `分支展开 ${curr.id}`,
+                                desc: msg,
+                                pq: JSON.parse(JSON.stringify(PQ)),
+                                currentState: JSON.parse(JSON.stringify(curr)),
+                                graphSelection: [...curr.sel],
+                                highlightNodes: [v_idx],
+                                highlightCards: added,
+                                ub: UB
+                            });
+                        }
+                    }
+
+                    // 结束
+                    steps.push({
+                        title: "算法完成",
+                        desc: `优先队列为空，状态空间搜索完毕。<br><br><b>最小权重为：${UB}</b><br>对应的顶点覆盖集合为：${bestSolution.map((s,i)=> s===1 ? `V${i}` : '').filter(Boolean).join(', ')}。`,
+                        pq: [],
+                        currentState: null,
+                        graphSelection: bestSolution || [],
+                        highlightNodes: bestSolution ? bestSolution.map((s,i)=> s===1 ? i : -1).filter(i=>i!==-1) : [],
+                        highlightCards: [],
+                        ub: UB
+                    });
+                }
+
+                generateAlgorithmSteps();
+
+                // 响应式状态管理
+                const currentStepIndex = ref(0);
+                const isPlaying = ref(false);
+                const speed = ref(1000);
+                const graphCanvas = ref(null);
+                const logContainer = ref(null);
+                let playInterval = null;
+
+                const currentStepData = computed(() => steps[currentStepIndex.value]);
+                const logMessages = computed(() => steps.slice(0, currentStepIndex.value + 1));
+
+                // 辅助函数：格式化数组显示
+                const formatSelection = (sel) => {
+                    return '[' + sel.map(x => x === 1 ? '1' : (x === 0 ? '0' : '?')).join(', ') + ']';
+                };
+                const isCardHighlighted = (id) => currentStepData.value.highlightCards.includes(id);
+
+                // 控制逻辑
+                const nextStep = () => { if (currentStepIndex.value < steps.length - 1) currentStepIndex.value++; };
+                const prevStep = () => { if (currentStepIndex.value > 0) currentStepIndex.value--; };
+                const reset = () => { 
+                    currentStepIndex.value = 0; 
+                    if(isPlaying.value) togglePlay(); 
+                };
+                
+                const togglePlay = () => {
+                    isPlaying.value = !isPlaying.value;
+                    if (isPlaying.value) {
+                        if(currentStepIndex.value === steps.length - 1) currentStepIndex.value = 0;
+                        playInterval = setInterval(() => {
+                            if (currentStepIndex.value < steps.length - 1) nextStep();
+                            else togglePlay();
+                        }, 2800 - speed.value); // 反转速度映射
+                    } else {
+                        clearInterval(playInterval);
+                    }
+                };
+
+                // 监听调速
+                watch(speed, (newSpeed) => {
+                    if (isPlaying.value) {
+                        clearInterval(playInterval);
+                        playInterval = setInterval(() => {
+                            if (currentStepIndex.value < steps.length - 1) nextStep();
+                            else togglePlay();
+                        }, 2800 - newSpeed);
+                    }
+                });
+
+                // 日志自动滚动到底部
+                watch(currentStepIndex, async () => {
+                    await nextTick();
+                    if (logContainer.value) {
+                        logContainer.value.scrollTop = logContainer.value.scrollHeight;
+                    }
+                });
+
+                // --- Canvas 渲染与动画 ---
+                let animationId = null;
+                const renderCanvas = () => {
+                    const canvas = graphCanvas.value;
+                    if (!canvas) return;
+                    const ctx = canvas.getContext('2d');
+                    
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    
+                    const sel = currentStepData.value.graphSelection;
+                    const highlights = currentStepData.value.highlightNodes;
+                    const time = Date.now();
+
+                    // 1. 绘制边
+                    ctx.lineWidth = 3;
+                    for (let [u, v] of edgesData) {
+                        // 决定边的颜色：只要有一个端点被选，边就被覆盖 (绿色)
+                        let isCovered = (sel[u] === 1 || sel[v] === 1);
+                        // 如果两个端点都被排除，这在物理上是非法的，但在未剪枝前可能短暂呈现，用红色标出
+                        let isInvalid = (sel[u] === 0 && sel[v] === 0);
+                        
+                        if (isCovered) ctx.strokeStyle = '#4ade80'; // 绿色
+                        else if (isInvalid) ctx.strokeStyle = '#f87171'; // 红色
+                        else ctx.strokeStyle = '#cbd5e1'; // 灰色 (未决定)
+
+                        ctx.beginPath();
+                        ctx.moveTo(nodesData[u].x, nodesData[u].y);
+                        ctx.lineTo(nodesData[v].x, nodesData[v].y);
+                        ctx.stroke();
+                    }
+
+                    // 2. 绘制节点
+                    for (let i = 0; i < N; i++) {
+                        const node = nodesData[i];
+                        let r = 22; // 基础半径
+                        
+                        // 脉冲缩放动画核心：若该节点是当前高亮目标
+                        if (highlights.includes(i)) {
+                            // 使用正弦函数制造缓慢的放大缩小效果
+                            const scale = 1 + Math.sin(time / 150) * 0.15;
+                            r = 22 * scale;
+                        }
+
+                        // 决定节点颜色
+                        let fillColor = '#f1f5f9';
+                        let strokeColor = '#94a3b8';
+                        
+                        if (sel[i] === 1) { fillColor = '#4ade80'; strokeColor = '#22c55e'; } // 绿
+                        else if (sel[i] === 0) { fillColor = '#f87171'; strokeColor = '#ef4444'; } // 红
+                        
+                        // 若节点被高亮，增加发光效果
+                        if (highlights.includes(i)) {
+                            ctx.shadowColor = (sel[i] === 1) ? 'rgba(74,222,128,0.8)' : 
+                                              (sel[i] === 0) ? 'rgba(248,113,113,0.8)' : 'rgba(59,130,246,0.8)';
+                            ctx.shadowBlur = 15;
+                        } else {
+                            ctx.shadowBlur = 0;
+                        }
+
+                        // 画圆
+                        ctx.beginPath();
+                        ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+                        ctx.fillStyle = fillColor;
+                        ctx.fill();
+                        ctx.lineWidth = 3;
+                        ctx.strokeStyle = strokeColor;
+                        ctx.stroke();
+                        ctx.shadowBlur = 0; // 重置阴影
+
+                        // 绘制文字
+                        ctx.fillStyle = (sel[i] === -1) ? '#475569' : '#ffffff';
+                        ctx.font = 'bold 12px sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(`${node.label}(${node.w})`, node.x, node.y);
+                    }
+
+                    animationId = requestAnimationFrame(renderCanvas);
+                };
+
+                onMounted(() => {
+                    renderCanvas();
+                });
+
+                return {
+                    steps, currentStepIndex, currentStepData, logMessages,
+                    isPlaying, speed, togglePlay, nextStep, prevStep, reset,
+                    graphCanvas, logContainer, formatSelection, isCardHighlighted
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
+```eof
+
+### 这个演示页面的独特亮点：
+1. **彻底消除阅读连线的视觉疲劳**：在解释 B&B 时，许多教程会画一棵庞大的二叉树，随着深度增加，连线极度混乱。我将其扁平化为一个动态的优先队列列表（卡片式），您只需关注“当前正在处理谁”以及“产生了哪些新状态”，认知负担极小。
+2. **遵循您的强调规则（无连线交互 + 脉冲放大动画）**：
+   - 算法计算生成新状态时，**没有飞来飞去的引导线**。
+   - 取而代之的是，利用 CSS `@keyframes customPulse` 和 Canvas 的 `Math.sin()` 数学曲线，使图模型中被探讨的顶点、以及队列中新加入的状态卡片，产生“**缓缓放大并散发光晕，然后缩回**”的呼吸效果。这有效地抓取了眼球，提示了变化。
+3. **生动直观的前瞻下界（Lower Bound）教学**：状态详解（右侧面板）中，对分支限界最难懂的 `LB` 做了保姆级拆解。当你不选择 $V_0$ 时，它会明确告诉你：“因为你没选 $V_0$，为了不漏掉边，与其相连的 $V_1, V_2$ **被迫选择**，强制成本累加后 LB = ...”，伴随着这些解释，图模型会用红绿两色进行涂色模拟。
+
+您可以直接将上述代码保存为 `BranchAndBound.html`，在任意现代浏览器中双击打开。打开后点击顶部绿色的“自动”播放按钮，并配合滑块调整演示速度，即可沉浸式观看这堂精彩的算法课。

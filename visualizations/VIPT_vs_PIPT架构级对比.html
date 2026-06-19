@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VIPT vs PIPT 架构级可视化对比</title>
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.3.4/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: { 
+                        primary: '#2563eb', secondary: '#059669', dark: '#0f172a',
+                        vtag: '#f59e0b', ptag: '#d97706', index: '#3b82f6', offset: '#94a3b8', 
+                        data: '#10b981', valid: '#8b5cf6'
+                    },
+                    fontFamily: { mono: ['"Fira Code"', 'Consolas', 'monospace'] }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; background-color: #f8fafc; color: #334155; margin: 0; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .no-select { user-select: none; -webkit-user-select: none; }
+        
+        /* 硬件门电路样式 */
+        .hw-comparator {
+            clip-path: polygon(0% 0%, 100% 20%, 100% 80%, 0% 100%);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .hw-and-gate {
+            clip-path: path('M 0 0 L 20 0 C 60 0 60 60 20 60 L 0 60 Z');
+            display: flex; align-items: center; justify-content: flex-start; padding-left: 14px;
+        }
+        .memory-table th, .memory-table td { border: 1px solid #cbd5e1; padding: 4px 12px; text-align: center; }
+        .memory-table th { background-color: #e2e8f0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #475569;}
+        .memory-table td { font-family: monospace; font-size: 13px; }
+        
+        /* 激活状态的高亮发光 */
+        .glow-vtag { box-shadow: 0 0 12px rgba(245, 158, 11, 0.5); border-color: #f59e0b; }
+        .glow-ptag { box-shadow: 0 0 12px rgba(217, 119, 6, 0.5); border-color: #d97706; }
+        .glow-index { box-shadow: 0 0 12px rgba(59, 130, 246, 0.5); border-color: #3b82f6; }
+        .glow-data { box-shadow: 0 0 14px rgba(16, 185, 129, 0.6); border-color: #10b981; }
+        .glow-valid { box-shadow: 0 0 12px rgba(139, 92, 246, 0.5); border-color: #8b5cf6; }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden flex flex-col no-select">
+    <div id="app" class="h-full w-full flex flex-col">
+
+        <!-- 头部 -->
+        <header class="bg-dark text-white p-3 shadow-lg flex justify-between items-center z-30 shrink-0 border-b border-slate-700">
+            <div>
+                <h1 class="text-lg font-bold flex items-center gap-3 tracking-wide">
+                    <i class="fa-solid fa-microchip text-primary text-xl"></i>
+                    VIPT vs PIPT 寻址架构逻辑对比
+                </h1>
+            </div>
+            <div class="flex bg-slate-800 rounded-lg p-1 border border-slate-600">
+                <button @click="setMode('PIPT')" class="px-5 py-1.5 rounded-md text-sm font-bold transition duration-200"
+                    :class="mode === 'PIPT' ? 'bg-primary text-white shadow-inner' : 'text-slate-400 hover:text-slate-100'">
+                    PIPT (串行瓶颈)
+                </button>
+                <button @click="setMode('VIPT')" class="px-5 py-1.5 rounded-md text-sm font-bold transition duration-200"
+                    :class="mode === 'VIPT' ? 'bg-secondary text-white shadow-inner' : 'text-slate-400 hover:text-slate-100'">
+                    VIPT (并行寻址)
+                </button>
+            </div>
+        </header>
+
+        <main class="flex-1 flex overflow-hidden relative bg-slate-50">
+            <!-- 左侧控制台 -->
+            <aside class="w-80 bg-white border-r border-slate-200 flex flex-col shadow-xl z-20 shrink-0">
+                <div class="p-5 border-b border-slate-200 bg-slate-50">
+                    <div class="flex gap-2 mb-4">
+                        <button @click="reset" class="flex-1 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 py-2 rounded text-sm font-bold flex items-center justify-center gap-2 transition shadow-sm">
+                            <i class="fa-solid fa-rotate-left"></i> 重置
+                        </button>
+                        <button @click="step" :disabled="isAutoPlaying || currentStep >= maxSteps" 
+                                class="flex-1 py-2 rounded text-sm font-bold flex items-center justify-center gap-2 transition shadow-sm"
+                                :class="(isAutoPlaying || currentStep >= maxSteps) ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200' : 'bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100'">
+                            <i class="fa-solid fa-forward-step"></i> 单步演示
+                        </button>
+                    </div>
+                    <button @click="toggleAutoPlay" class="w-full py-2.5 mb-4 rounded shadow-md text-sm font-bold flex items-center justify-center gap-2 transition text-white"
+                            :class="isAutoPlaying ? 'bg-red-500 hover:bg-red-600' : 'bg-slate-800 hover:bg-slate-900'">
+                        <i class="fa-solid" :class="isAutoPlaying ? 'fa-pause' : 'fa-play'"></i>
+                        {{ isAutoPlaying ? '暂停演示' : '自动播放' }}
+                    </button>
+                    <div class="px-1">
+                        <label class="block text-xs font-bold text-slate-500 mb-2 flex justify-between uppercase tracking-wider">
+                            <span>数据流速</span><span class="text-primary">{{ playSpeed }}x</span>
+                        </label>
+                        <input type="range" min="1" max="5" v-model="playSpeed" class="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-primary">
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-y-auto p-5 relative">
+                    <div class="space-y-4 pb-8">
+                        <div v-for="(stepData, index) in stepsList" :key="index" 
+                             class="p-3 rounded-lg border-l-4 transition-all duration-300 relative overflow-hidden"
+                             :class="currentStep === index ? 'border-primary bg-blue-50 shadow-md' : (currentStep > index ? 'border-green-400 bg-white opacity-70' : 'border-slate-200 bg-white opacity-40')">
+                            
+                            <!-- 进度背景条 -->
+                            <div v-if="currentStep === index" class="absolute inset-0 bg-blue-100/30 w-full animate-pulse-fast pointer-events-none"></div>
+
+                            <h3 class="font-bold mb-1.5 flex justify-between items-center text-slate-800 text-sm relative z-10">
+                                <span>{{ index }}. {{ stepData.title }}</span>
+                                <i v-if="currentStep === index" class="fa-solid fa-satellite-dish text-primary animate-pulse text-sm"></i>
+                                <i v-else-if="currentStep > index" class="fa-solid fa-check-circle text-green-500 text-sm"></i>
+                            </h3>
+                            <p v-show="currentStep >= index" class="text-xs text-slate-600 leading-relaxed relative z-10">{{ stepData.desc }}</p>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- 右侧主画布区 -->
+            <div class="flex-1 relative overflow-y-auto overflow-x-hidden bg-slate-100/50" id="scrollContainer">
+                <div class="relative min-h-full w-full" id="drawArea" :style="{ height: drawAreaHeight + 'px' }">
+                    
+                    <!-- 物理正交布线层 (流动数据线) -->
+                    <canvas id="mainCanvas" class="absolute top-0 left-0 w-full h-full z-0 pointer-events-none"></canvas>
+
+                    <!-- ========================================== -->
+                    <!-- 布局 A: PIPT 模式                          -->
+                    <!-- ========================================== -->
+                    <div v-if="mode === 'PIPT'" class="absolute top-0 left-0 w-full p-8 flex flex-col items-center pointer-events-none" id="layout-pipt">
+                        
+                        <!-- 1. CPU VA -->
+                        <div class="bg-white rounded border-2 border-slate-300 p-2 shadow-sm flex flex-col items-center pointer-events-auto shrink-0 mb-12" id="pipt_va">
+                            <div class="text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wider">CPU Virtual Address (32-bit)</div>
+                            <div class="flex font-mono text-center bg-slate-50 border border-slate-200 rounded relative">
+                                <div class="px-4 py-1.5 border-r border-slate-200 transition-all duration-300 z-10" :class="hl.vaTag ? 'bg-amber-100 font-bold glow-vtag' : ''" id="pipt_va_tag">
+                                    <div class="text-[9px] text-slate-400">V-Tag / VPN (20b)</div>
+                                    <div :class="hl.vaTag ? 'text-amber-700' : 'text-slate-600'">0x1A2B3</div>
+                                </div>
+                                <div class="px-4 py-1.5 border-r border-slate-200 transition-all duration-300 z-10" :class="hl.vaIndex ? 'bg-blue-100 font-bold glow-index' : ''" id="pipt_va_index">
+                                    <div class="text-[9px] text-slate-400">Index (6b)</div>
+                                    <div :class="hl.vaIndex ? 'text-blue-700' : 'text-slate-600'">0x0F</div>
+                                </div>
+                                <div class="px-4 py-1.5 opacity-50 z-10">
+                                    <div class="text-[9px] text-slate-400">Offset (6b)</div>
+                                    <div class="text-slate-600">0x10</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 2. TLB -->
+                        <div class="flex gap-4 items-center mb-12">
+                            <div class="bg-white rounded border border-slate-300 shadow-md flex flex-col pointer-events-auto shrink-0 relative" id="pipt_tlb">
+                                <div class="bg-slate-700 text-white p-1.5 text-xs font-bold text-center flex items-center justify-center gap-2 rounded-t transition-colors duration-300" :class="hl.tlbHit ? 'bg-amber-600' : ''">
+                                    <i class="fa-solid fa-book" :class="hl.tlbHit ? 'text-white' : 'text-amber-400'"></i> TLB (地址转换)
+                                </div>
+                                <table class="memory-table m-2">
+                                    <thead><tr><th>V-Tag (in)</th><th>P-Tag (out)</th><th>V</th></tr></thead>
+                                    <tbody>
+                                        <tr v-for="(entry, idx) in tlb" :key="idx" :class="hl.tlbHit && idx===1 ? 'bg-amber-100 font-bold text-amber-800' : 'text-slate-600'">
+                                            <td>{{ entry.vTag }}</td><td>{{ entry.pTag }}</td><td class="text-green-600">1</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                <div class="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2" id="pipt_tlb_out"></div>
+                            </div>
+                        </div>
+
+                        <!-- 3. PA Buffer -->
+                        <div class="bg-slate-800 rounded border-2 border-slate-600 p-2 shadow flex flex-col items-center pointer-events-auto shrink-0 mb-12 relative" id="pipt_pa">
+                            <div class="text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-wider"><i class="fa-solid fa-link text-xs"></i> Physical Address</div>
+                            <div class="flex font-mono text-center bg-slate-900 border border-slate-700 rounded relative">
+                                <div class="px-4 py-1.5 border-r border-slate-700 transition-all duration-300 z-10" :class="hl.paTag ? 'bg-amber-900/50 font-bold text-amber-400 border-amber-600 glow-ptag' : 'text-slate-500'" id="pipt_pa_tag">
+                                    <div class="text-[9px] text-slate-500">P-Tag (20b)</div>
+                                    <div>{{ hl.paTag ? '0x4F5' : '-----' }}</div>
+                                </div>
+                                <div class="px-4 py-1.5 border-r border-slate-700 transition-all duration-300 z-10" :class="hl.paIndex ? 'bg-blue-900/50 font-bold text-blue-400 border-blue-600 glow-index' : 'text-slate-500'" id="pipt_pa_index">
+                                    <div class="text-[9px] text-slate-500">P-Index (6b)</div>
+                                    <div>{{ hl.paIndex ? '0x0F' : '----' }}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 4. Cache -->
+                        <div class="bg-white rounded border border-slate-300 shadow-md flex flex-col pointer-events-auto shrink-0 relative mb-12" id="pipt_cache">
+                            <div v-if="currentStep < 3" class="absolute inset-0 bg-slate-200/80 backdrop-blur-sm z-20 flex flex-col items-center justify-center rounded">
+                                <i class="fa-solid fa-lock text-slate-400 text-2xl mb-2"></i>
+                                <span class="text-xs font-bold text-slate-500 tracking-wider">等待物理索引(P-Index)</span>
+                            </div>
+                            
+                            <div class="bg-slate-700 text-white p-1.5 text-xs font-bold text-center flex items-center justify-center gap-2 rounded-t transition-colors duration-300" :class="hl.cacheRead ? 'bg-blue-600' : ''">
+                                <i class="fa-solid fa-memory" :class="hl.cacheRead ? 'text-white' : 'text-blue-400'"></i> L1 Data Cache
+                            </div>
+                            <table class="memory-table m-2 relative">
+                                <thead><tr><th>P-Index (in)</th><th>P-Tag (out)</th><th>Data (out)</th><th>Valid (out)</th></tr></thead>
+                                <tbody>
+                                    <tr v-for="(line, idx) in cache" :key="idx" :class="hl.cacheRead && idx===1 ? 'bg-blue-50 font-bold text-blue-800' : 'text-slate-600'">
+                                        <td class="bg-slate-100">{{ line.index }}</td>
+                                        <td>{{ line.tag }}</td>
+                                        <td :class="hl.cacheRead && idx===1?'text-green-600':''">{{ line.data }}</td>
+                                        <td :class="hl.cacheRead && idx===1?'text-purple-600 font-bold':''">1</td>
+                                    </tr>
+                                </tbody>
+                                <div v-if="hl.cacheRead" class="absolute top-[29px] left-0 right-0 h-[27px] border-2 border-blue-500 pointer-events-none z-10"></div>
+                            </table>
+                            
+                            <div class="absolute -bottom-1 w-full flex justify-between px-10">
+                                <div class="w-2 h-2" id="pipt_cache_tag_out"></div>
+                                <div class="w-2 h-2" id="pipt_cache_data_out"></div>
+                                <div class="w-2 h-2" id="pipt_cache_valid_out"></div>
+                            </div>
+                        </div>
+
+                        <!-- 5. 硬件逻辑 -->
+                        <div class="w-full max-w-2xl mt-4 pointer-events-auto flex flex-col items-center">
+                            
+                            <div class="w-full flex justify-between items-start px-8 mb-12">
+                                <div class="flex flex-col items-center relative ml-8">
+                                    <div class="text-[9px] font-bold text-slate-500 mb-2 bg-white px-2 py-0.5 rounded border">Tag 比较器 (Match)</div>
+                                    <div class="flex gap-4 absolute -top-1 w-full justify-center">
+                                        <div class="w-1 h-1" id="pipt_comp_in_pa"></div> 
+                                        <div class="w-1 h-1" id="pipt_comp_in_cache"></div> 
+                                    </div>
+                                    <div class="hw-comparator w-20 h-14 bg-amber-400 border-2 border-amber-600 shadow-md transition-transform duration-300" :class="hl.comp ? 'scale-110 glow-ptag' : ''" id="pipt_comp">
+                                        <span class="text-xl font-black text-amber-900">=</span>
+                                    </div>
+                                    <div class="absolute -bottom-1 w-1 h-1" id="pipt_comp_out_match"></div>
+                                </div>
+
+                                <div class="flex flex-col items-center relative mr-12 mt-4">
+                                    <div class="text-[9px] font-bold text-slate-500 mb-1 bg-white px-2 py-0.5 rounded border">有效位提取</div>
+                                    <div class="w-6 h-6 rounded-full border-2 border-purple-400 flex items-center justify-center font-bold text-xs bg-purple-50 text-purple-700 transition-all duration-300" :class="hl.cacheRead ? 'glow-valid scale-110 bg-purple-100' : ''" id="pipt_valid_node">V</div>
+                                </div>
+                            </div>
+
+                            <div class="w-full flex justify-center mb-12 relative">
+                                <div class="flex flex-col items-center absolute -top-8 left-1/2 -translate-x-1/2">
+                                    <div class="flex w-24 justify-between absolute -top-1">
+                                        <div class="w-1 h-1" id="pipt_and_in_match"></div>
+                                        <div class="w-1 h-1" id="pipt_and_in_valid"></div> 
+                                    </div>
+                                    <div class="text-[9px] font-bold text-slate-500 mb-1 bg-white px-2 py-0.5 rounded border absolute -top-6">Hit 判断逻辑</div>
+                                    <div class="hw-and-gate w-16 h-12 bg-emerald-400 shadow-md transition-transform duration-300" :class="hl.hit ? 'scale-110 glow-data' : ''" id="pipt_and">
+                                        <span class="text-lg font-black text-emerald-900 ml-1">&</span>
+                                    </div>
+                                    <div class="absolute -bottom-1 w-1 h-1" id="pipt_and_out_hit"></div>
+                                </div>
+                            </div>
+
+                            <div class="w-full flex justify-center">
+                                <div class="bg-slate-800 text-white rounded p-3 px-6 shadow-lg border-2 transition-colors duration-300 relative flex flex-col items-center min-w-[200px]" :class="hl.dataOut ? 'border-green-500 glow-data' : 'border-slate-600'" id="pipt_out">
+                                    <div class="absolute -top-1 left-4 w-1 h-1" id="pipt_out_in_hit"></div> 
+                                    <div class="absolute -top-1 right-4 w-1 h-1" id="pipt_out_in_data"></div>
+                                    
+                                    <div class="text-[10px] text-slate-400 mb-1 flex items-center justify-between w-full">
+                                        <span><i class="fa-solid fa-microchip"></i> 控制: {{ hl.hit ? 'Hit' : '---' }}</span>
+                                        <span>CPU Data Bus</span>
+                                    </div>
+                                    <div class="font-mono font-bold text-xl" :class="hl.dataOut ? 'text-green-400' : 'text-slate-500'">
+                                        {{ hl.dataOut ? '0xDEADBEEF' : '---------' }}
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+
+                    <!-- ========================================== -->
+                    <!-- 布局 B: VIPT 模式                          -->
+                    <!-- ========================================== -->
+                    <div v-else class="absolute top-0 left-0 w-full p-8 flex flex-col items-center pointer-events-none" id="layout-vipt">
+                        
+                        <!-- 1. CPU VA -->
+                        <div class="bg-white rounded border-2 border-slate-300 p-2 shadow-sm flex flex-col items-center pointer-events-auto shrink-0 mb-12 relative" id="vipt_va">
+                            <div class="text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wider">CPU Virtual Address (32-bit)</div>
+                            <div class="flex font-mono text-center bg-slate-50 border border-slate-200 rounded relative z-10">
+                                <div class="px-4 py-1.5 border-r border-slate-200 transition-all duration-300" :class="hl.vaTag ? 'bg-amber-100 font-bold glow-vtag' : ''" id="vipt_va_tag">
+                                    <div class="text-[9px] text-slate-400">V-Tag (20b)</div>
+                                    <div :class="hl.vaTag ? 'text-amber-700' : 'text-slate-600'">0x1A2B3</div>
+                                </div>
+                                <div class="px-4 py-1.5 border-r border-slate-200 transition-all duration-300" :class="hl.vaIndex ? 'bg-blue-100 font-bold glow-index' : ''" id="vipt_va_index">
+                                    <div class="text-[9px] text-slate-400">V-Index (6b)</div>
+                                    <div :class="hl.vaIndex ? 'text-blue-700' : 'text-slate-600'">0x0F</div>
+                                </div>
+                                <div class="px-4 py-1.5 opacity-50">
+                                    <div class="text-[9px] text-slate-400">Offset (6b)</div>
+                                    <div class="text-slate-600">0x10</div>
+                                </div>
+                            </div>
+                            <div v-if="currentStep >= 1" class="absolute -bottom-8 bg-blue-50 text-blue-700 text-[10px] px-3 py-1 rounded border border-blue-200 shadow-sm z-20 font-bold animate-bounce">
+                                <i class="fa-solid fa-bolt text-amber-500"></i> V-Index 直接等价 P-Index！
+                            </div>
+                        </div>
+
+                        <!-- 2. 并行层 -->
+                        <div class="w-full max-w-4xl flex justify-between items-start mb-16 px-4">
+                            <div class="bg-white rounded border border-slate-300 shadow-lg flex flex-col pointer-events-auto shrink-0 relative z-10" id="vipt_tlb">
+                                <div class="bg-slate-700 text-white p-1.5 text-xs font-bold text-center flex items-center justify-center gap-2 rounded-t transition-colors duration-300" :class="hl.tlbHit ? 'bg-amber-600' : ''">
+                                    <i class="fa-solid fa-book" :class="hl.tlbHit?'text-white':'text-amber-400'"></i> TLB
+                                </div>
+                                <table class="memory-table m-2">
+                                    <thead><tr><th>V-Tag</th><th>P-Tag</th><th>V</th></tr></thead>
+                                    <tbody>
+                                        <tr v-for="(entry, idx) in tlb" :key="idx" :class="hl.tlbHit && idx===1 ? 'bg-amber-100 font-bold text-amber-800' : 'text-slate-600'">
+                                            <td>{{ entry.vTag }}</td><td>{{ entry.pTag }}</td><td class="text-green-600">1</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                <div class="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2" id="vipt_tlb_out"></div>
+                            </div>
+
+                            <div class="bg-white rounded border border-slate-300 shadow-lg flex flex-col pointer-events-auto shrink-0 relative z-10" id="vipt_cache">
+                                <div class="bg-slate-700 text-white p-1.5 text-xs font-bold text-center flex items-center justify-center gap-2 rounded-t transition-colors duration-300" :class="hl.cacheRead ? 'bg-blue-600' : ''">
+                                    <i class="fa-solid fa-memory" :class="hl.cacheRead?'text-white animate-pulse':'text-blue-400'"></i> L1 Data Cache
+                                </div>
+                                <table class="memory-table m-2 relative">
+                                    <thead><tr><th>Index</th><th>Tag(P)</th><th>Data</th><th>Valid</th></tr></thead>
+                                    <tbody>
+                                        <tr v-for="(line, idx) in cache" :key="idx" :class="hl.cacheRead && idx===1 ? 'bg-blue-50 font-bold text-blue-800' : 'text-slate-600'">
+                                            <td class="bg-slate-100">{{ line.index }}</td><td>{{ line.tag }}</td>
+                                            <td :class="hl.cacheRead && idx===1?'text-green-600':''">{{ line.data }}</td>
+                                            <td :class="hl.cacheRead && idx===1?'text-purple-600 font-bold':''">1</td>
+                                        </tr>
+                                    </tbody>
+                                    <div v-if="hl.cacheRead" class="absolute top-[29px] left-0 right-0 h-[27px] border-2 border-blue-500 pointer-events-none"></div>
+                                </table>
+                                <div class="absolute -bottom-1 w-full flex justify-between px-8">
+                                    <div class="w-2 h-2" id="vipt_cache_tag_out"></div>
+                                    <div class="w-2 h-2" id="vipt_cache_data_out"></div>
+                                    <div class="w-2 h-2" id="vipt_cache_valid_out"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 3. 硬件逻辑 -->
+                        <div class="w-full max-w-3xl pointer-events-auto flex flex-col items-center">
+                            <div class="w-full flex justify-between items-start px-24 mb-12">
+                                <div class="flex flex-col items-center relative">
+                                    <div class="text-[9px] font-bold text-slate-500 mb-2 bg-white px-2 py-0.5 rounded border">并行 Tag 比较</div>
+                                    <div class="flex gap-10 absolute -top-1 w-full justify-center">
+                                        <div class="w-1 h-1" id="vipt_comp_in_tlb"></div>
+                                        <div class="w-1 h-1" id="vipt_comp_in_cache"></div>
+                                    </div>
+                                    <div class="hw-comparator w-24 h-16 bg-amber-400 border-2 border-amber-600 shadow-lg transition-transform duration-300" :class="hl.comp ? 'scale-110 glow-ptag' : ''" id="vipt_comp">
+                                        <span class="text-2xl font-black text-amber-900">=</span>
+                                    </div>
+                                    <div class="absolute -bottom-1 w-1 h-1" id="vipt_comp_out_match"></div>
+                                </div>
+
+                                <div class="flex flex-col items-center relative mt-4">
+                                    <div class="text-[9px] font-bold text-slate-500 mb-1 bg-white px-2 py-0.5 rounded border">状态位</div>
+                                    <div class="w-8 h-8 rounded-full border-2 border-purple-400 flex items-center justify-center font-bold text-sm bg-purple-50 text-purple-700 transition-all duration-300" :class="hl.cacheRead ? 'glow-valid scale-110 bg-purple-100' : ''" id="vipt_valid_node">V</div>
+                                </div>
+                            </div>
+
+                            <div class="w-full flex justify-center mb-12 relative">
+                                <div class="flex flex-col items-center absolute -top-8 left-1/2 -translate-x-1/2">
+                                    <div class="flex w-32 justify-between absolute -top-1">
+                                        <div class="w-1 h-1" id="vipt_and_in_match"></div> 
+                                        <div class="w-1 h-1" id="vipt_and_in_valid"></div>
+                                    </div>
+                                    <div class="text-[9px] font-bold text-slate-500 mb-1 bg-white px-2 py-0.5 rounded border absolute -top-6">Hit 逻辑</div>
+                                    <div class="hw-and-gate w-20 h-14 bg-emerald-400 shadow-lg transition-transform duration-300" :class="hl.hit ? 'scale-110 glow-data' : ''" id="vipt_and">
+                                        <span class="text-xl font-black text-emerald-900 ml-2">&</span>
+                                    </div>
+                                    <div class="absolute -bottom-1 w-1 h-1" id="vipt_and_out_hit"></div>
+                                </div>
+                            </div>
+
+                            <div class="w-full flex justify-center">
+                                <div class="bg-slate-800 text-white rounded p-4 px-8 shadow-xl border-2 transition-colors duration-300 relative flex flex-col items-center min-w-[240px]" :class="hl.dataOut ? 'border-green-500 glow-data' : 'border-slate-600'" id="vipt_out">
+                                    <div class="absolute -top-1 left-6 w-1 h-1" id="vipt_out_in_hit"></div>
+                                    <div class="absolute -top-1 right-6 w-1 h-1" id="vipt_out_in_data"></div>
+                                    
+                                    <div class="text-[11px] text-slate-400 mb-2 flex items-center justify-between w-full border-b border-slate-600 pb-1">
+                                        <span>控制: {{ hl.hit ? 'Hit (命中)' : '---' }}</span>
+                                        <span class="text-white"><i class="fa-solid fa-arrow-right-to-bracket text-green-400"></i> 返回 CPU</span>
+                                    </div>
+                                    <div class="font-mono font-bold text-2xl" :class="hl.dataOut ? 'text-green-400' : 'text-slate-500'">
+                                        {{ hl.dataOut ? '0xDEADBEEF' : '---------' }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, computed, onMounted, onUnmounted, nextTick } = Vue;
+
+        createApp({
+            setup() {
+                const mode = ref('PIPT');
+                const currentStep = ref(0);
+                const isAutoPlaying = ref(false);
+                const playSpeed = ref(3);
+                let timer = null;
+                let animFrameId = null;
+                const drawAreaHeight = ref(1000);
+
+                const tlb = [
+                    { vTag: '0x00112', pTag: '0x100' },
+                    { vTag: '0x1A2B3', pTag: '0x4F5' },
+                    { vTag: '0x2C3D4', pTag: '0x8A1' }
+                ];
+                const cache = [
+                    { index: '0x0E', tag: '0x123', data: '0x00000000' },
+                    { index: '0x0F', tag: '0x4F5', data: '0xDEADBEEF' },
+                    { index: '0x10', tag: '0xAAA', data: '0xFFFFFFFF' }
+                ];
+
+                const hl = reactive({
+                    vaTag: false, vaIndex: false,
+                    tlbHit: false, paTag: false, paIndex: false,
+                    cacheRead: false, comp: false, hit: false,
+                    dataOut: false
+                });
+
+                const stepsPIPT = [
+                    { title: "CPU 发出虚拟地址 (VA)", desc: "发出 32 位虚拟地址。包含：V-Tag(20位)、Index(6位)、Offset(6位)。" },
+                    { title: "1. 串行瓶颈：查询 TLB", desc: "由于 Cache 必须使用物理地址，必须先将 V-Tag 送入 TLB 查找对应的物理页号(P-Tag)。在此期间 Cache 处于空闲状态。" },
+                    { title: "2. 组装物理地址 (PA)", desc: "TLB 命中并输出转换后的 P-Tag。硬件将 P-Tag 与原本不变的 Index 组合，形成了完整的物理地址。" },
+                    { title: "3. 读取 L1 Cache", desc: "有了物理地址，现在可以使用物理索引(P-Index)定位到 Cache 行，读出内部存储的 P-Tag、Data 以及 Valid 位。" },
+                    { title: "4. Tag 硬件比较", desc: "将物理地址中的 P-Tag 与从 Cache 读出的 Tag 送入比较器。当两者完全一致时，Match 信号为真。" },
+                    { title: "5. 逻辑综合 (Hit 判断)", desc: "与门(AND)结合比较器的 Match 和缓存的 Valid 标志，生成最终的 Hit 信号。" },
+                    { title: "6. 数据总线输出", desc: "Hit 信号作为控制端开启多路选择器(MUX)，将读出的 0xDEADBEEF 数据真正放行回 CPU。" }
+                ];
+
+                const stepsVIPT = [
+                    { title: "CPU 发出虚拟地址", desc: "前置条件：当 V-Index 的位数没有超过页面大小决定的位范围时，V-Index 与 P-Index 各位完全相同。" },
+                    { title: "1. 核心优势：并行双路查询", desc: "由于 V-Index 等价物理 Index，硬件不再等待！V-Tag 提交给 TLB，同时 V-Index 提交给 Cache 寻址。" },
+                    { title: "2. TLB 与 Cache 同时就绪", desc: "查询时间被重叠。TLB 翻译出了 P-Tag，与此同时 Cache 也通过 Index 提取出了缓存块。" },
+                    { title: "3. Tag 比较与验证", desc: "硬件设计上的点睛之笔：用 TLB 刚刚翻译出来的 P-Tag 去和 Cache 提前读出的 Tag 直接进行比较。" },
+                    { title: "4. Hit 与数据返回", desc: "Match 与 Valid 综合出 Hit 信号并开启数据阀门。VIPT 打破了串行链条，是现代处理器架构的主流。" }
+                ];
+
+                const stepsList = computed(() => mode.value === 'PIPT' ? stepsPIPT : stepsVIPT);
+                const maxSteps = computed(() => stepsList.value.length - 1);
+
+                const resetState = () => {
+                    Object.keys(hl).forEach(k => hl[k] = false);
+                    activeConnections.value = [];
+                };
+
+                const setMode = (m) => {
+                    if (mode.value === m) return;
+                    mode.value = m;
+                    currentStep.value = 0;
+                    isAutoPlaying.value = false;
+                    clearTimeout(timer);
+                    resetState();
+                    executeStep(0);
+                    nextTick(() => { calculateDrawArea(); });
+                };
+
+                const step = () => {
+                    if (currentStep.value < maxSteps.value) {
+                        currentStep.value++;
+                        executeStep(currentStep.value);
+                    } else {
+                        isAutoPlaying.value = false;
+                    }
+                };
+
+                const reset = () => {
+                    currentStep.value = 0;
+                    isAutoPlaying.value = false;
+                    clearTimeout(timer);
+                    resetState();
+                    executeStep(0);
+                };
+
+                const toggleAutoPlay = () => {
+                    isAutoPlaying.value = !isAutoPlaying.value;
+                    if (isAutoPlaying.value) {
+                        if (currentStep.value >= maxSteps.value) reset();
+                        runPlay();
+                    } else {
+                        clearTimeout(timer);
+                    }
+                };
+
+                const runPlay = () => {
+                    if (!isAutoPlaying.value) return;
+                    step();
+                    if (currentStep.value < maxSteps.value) {
+                        timer = setTimeout(runPlay, 3000 / playSpeed.value);
+                    }
+                };
+
+                const activeConnections = ref([]);
+
+                const executeStep = (s) => {
+                    resetState();
+                    const C_TAG = '#f59e0b', C_IDX = '#3b82f6', C_DATA = '#10b981', C_VAL = '#8b5cf6', C_MATCH = '#ec4899';
+                    
+                    if (mode.value === 'PIPT') {
+                        if(s >= 0) { hl.vaTag = true; hl.vaIndex = true; }
+                        if(s >= 2) { hl.tlbHit = true; hl.paTag = true; hl.paIndex = true; }
+                        if(s >= 3) { hl.cacheRead = true; }
+                        if(s >= 4) { hl.comp = true; }
+                        if(s >= 5) { hl.hit = true; }
+                        if(s >= 6) { hl.dataOut = true; }
+
+                        const routes = [
+                            { f: 'pipt_va_tag', fp: 'b', t: 'pipt_tlb', tp: 't', col: C_TAG, route: 'S', app: 1 },
+                            { f: 'pipt_tlb_out', fp: 'b', t: 'pipt_pa_tag', tp: 't', col: C_TAG, route: 'S', app: 2 },
+                            { f: 'pipt_va_index', fp: 'b', t: 'pipt_pa_index', tp: 't', col: C_IDX, route: 'R_Bypass_TLB', app: 2 },
+                            { f: 'pipt_pa_index', fp: 'b', t: 'pipt_cache', tp: 't', col: C_IDX, route: 'S', app: 3 },
+                            { f: 'pipt_pa_tag', fp: 'b', t: 'pipt_comp_in_pa', tp: 't', col: C_TAG, route: 'L_Outer_PA', app: 4 },
+                            { f: 'pipt_cache_tag_out', fp: 'b', t: 'pipt_comp_in_cache', tp: 't', col: C_TAG, route: 'S', app: 4 },
+                            { f: 'pipt_comp_out_match', fp: 'b', t: 'pipt_and_in_match', tp: 't', col: C_MATCH, route: 'S', app: 5 },
+                            { f: 'pipt_cache_valid_out', fp: 'b', t: 'pipt_valid_node', tp: 't', col: C_VAL, route: 'S', app: 5 },
+                            { f: 'pipt_valid_node', fp: 'b', t: 'pipt_and_in_valid', tp: 't', col: C_VAL, route: 'S', app: 5 },
+                            { f: 'pipt_and_out_hit', fp: 'b', t: 'pipt_out_in_hit', tp: 't', col: C_MATCH, route: 'S', app: 6 },
+                            { f: 'pipt_cache_data_out', fp: 'b', t: 'pipt_out_in_data', tp: 't', col: C_DATA, route: 'R_Outer_Data', app: 6 }
+                        ];
+
+                        routes.forEach(r => {
+                            if (s === r.app) activeConnections.value.push({ ...r, anim: true });
+                            else if (s > r.app) activeConnections.value.push({ ...r, col: '#cbd5e1', anim: false });
+                        });
+
+                    } else {
+                        // VIPT 模式
+                        if(s >= 0) { hl.vaTag = true; hl.vaIndex = true; }
+                        if(s >= 2) { hl.tlbHit = true; hl.cacheRead = true; }
+                        if(s >= 3) { hl.comp = true; }
+                        if(s >= 4) { hl.hit = true; hl.dataOut = true; }
+
+                        const routes = [
+                            { f: 'vipt_va_tag', fp: 'b', t: 'vipt_tlb', tp: 't', col: C_TAG, route: 'S', app: 1 },
+                            { f: 'vipt_va_index', fp: 'b', t: 'vipt_cache', tp: 't', col: C_IDX, route: 'S', app: 1 },
+                            { f: 'vipt_tlb_out', fp: 'b', t: 'vipt_comp_in_tlb', tp: 't', col: C_TAG, route: 'S', app: 3 },
+                            { f: 'vipt_cache_tag_out', fp: 'b', t: 'vipt_comp_in_cache', tp: 't', col: C_TAG, route: 'S', app: 3 },
+                            { f: 'vipt_comp_out_match', fp: 'b', t: 'vipt_and_in_match', tp: 't', col: C_MATCH, route: 'S', app: 4 },
+                            { f: 'vipt_cache_valid_out', fp: 'b', t: 'vipt_valid_node', tp: 't', col: C_VAL, route: 'S', app: 4 },
+                            { f: 'vipt_valid_node', fp: 'b', t: 'vipt_and_in_valid', tp: 't', col: C_VAL, route: 'S', app: 4 },
+                            { f: 'vipt_and_out_hit', fp: 'b', t: 'vipt_out_in_hit', tp: 't', col: C_MATCH, route: 'S', app: 4 },
+                            { f: 'vipt_cache_data_out', fp: 'b', t: 'vipt_out_in_data', tp: 't', col: C_DATA, route: 'R_Outer_Data', app: 4 }
+                        ];
+
+                        routes.forEach(r => {
+                            if (s === r.app) activeConnections.value.push({ ...r, anim: true });
+                            else if (s > r.app) activeConnections.value.push({ ...r, col: '#cbd5e1', anim: false });
+                        });
+                    }
+                };
+
+                const getRect = (id) => {
+                    const el = document.getElementById(id);
+                    if (!el) return null;
+                    const rect = el.getBoundingClientRect();
+                    const container = document.getElementById('drawArea').getBoundingClientRect();
+                    return {
+                        x: rect.left - container.left + rect.width / 2,
+                        y: rect.top - container.top + rect.height / 2,
+                        top: rect.top - container.top,
+                        bottom: rect.bottom - container.top,
+                        left: rect.left - container.left,
+                        right: rect.right - container.left,
+                    };
+                };
+
+                const getPoint = (r, face) => {
+                    if(!r) return {x:0, y:0};
+                    if(face==='t') return {x: r.x, y: r.top};
+                    if(face==='b') return {x: r.x, y: r.bottom};
+                    return {x: r.x, y: r.y};
+                };
+
+                const drawArrow = (ctx, x, y, col) => {
+                    ctx.beginPath();
+                    const size = 6;
+                    ctx.moveTo(x-size, y-size); ctx.lineTo(x, y); ctx.lineTo(x+size, y-size);
+                    ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.setLineDash([]); ctx.stroke();
+                };
+
+                let dashOffset = 0;
+
+                const drawRoute = (ctx, startId, fp, endId, tp, col, routeStr='S', anim=false) => {
+                    const sr = getRect(startId); const er = getRect(endId);
+                    if(!sr || !er) return;
+                    const p1 = getPoint(sr, fp); const p2 = getPoint(er, tp);
+
+                    ctx.beginPath(); ctx.moveTo(p1.x, p1.y);
+                    
+                    switch(routeStr) {
+                        case 'S':
+                            const midY = (p1.y + p2.y) / 2;
+                            ctx.lineTo(p1.x, midY); ctx.lineTo(p2.x, midY); ctx.lineTo(p2.x, p2.y);
+                            break;
+                        case 'R_Bypass_TLB':
+                            const rx = Math.max(p1.x, p2.x) + 140;
+                            ctx.lineTo(p1.x, p1.y + 15); ctx.lineTo(rx, p1.y + 15); ctx.lineTo(rx, p2.y - 15); ctx.lineTo(p2.x, p2.y - 15); ctx.lineTo(p2.x, p2.y);
+                            break;
+                        case 'L_Outer_PA':
+                            const lx = Math.min(p1.x, p2.x) - 100;
+                            ctx.lineTo(p1.x, p1.y + 15); ctx.lineTo(lx, p1.y + 15); ctx.lineTo(lx, p2.y - 20); ctx.lineTo(p2.x, p2.y - 20); ctx.lineTo(p2.x, p2.y);
+                            break;
+                        case 'R_Outer_Data':
+                            const dx = Math.max(p1.x, p2.x) + 100;
+                            ctx.lineTo(p1.x, p1.y + 20); ctx.lineTo(dx, p1.y + 20); ctx.lineTo(dx, p2.y - 20); ctx.lineTo(p2.x, p2.y - 20); ctx.lineTo(p2.x, p2.y);
+                            break;
+                    }
+
+                    ctx.strokeStyle = col;
+                    ctx.lineWidth = 3;
+                    
+                    if (anim) {
+                        ctx.setLineDash([10, 8]); 
+                        ctx.lineDashOffset = -dashOffset;
+                        ctx.shadowColor = col;
+                        ctx.shadowBlur = 10;
+                    } else {
+                        ctx.setLineDash([]);
+                        ctx.lineDashOffset = 0;
+                        ctx.shadowBlur = 0;
+                        ctx.globalAlpha = 0.5;
+                    }
+                    
+                    ctx.stroke();
+                    ctx.globalAlpha = 1.0;
+                    ctx.shadowBlur = 0;
+                    drawArrow(ctx, p2.x, p2.y, col);
+                };
+
+                const calculateDrawArea = () => {
+                    const el = document.getElementById(mode.value === 'PIPT' ? 'layout-pipt' : 'layout-vipt');
+                    if (el) drawAreaHeight.value = Math.max(el.scrollHeight, 800);
+                };
+
+                const renderLoop = () => {
+                    const canvas = document.getElementById('mainCanvas');
+                    const drawArea = document.getElementById('drawArea');
+                    
+                    if (canvas && drawArea) {
+                        if (canvas.width !== drawArea.offsetWidth || canvas.height !== drawArea.offsetHeight) {
+                            canvas.width = drawArea.offsetWidth;
+                            canvas.height = drawArea.offsetHeight;
+                        }
+                        
+                        const ctx = canvas.getContext('2d');
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        
+                        dashOffset += 1.5;
+                        
+                        activeConnections.value.forEach(conn => {
+                            drawRoute(ctx, conn.f, conn.fp, conn.t, conn.tp, conn.col, conn.route, conn.anim);
+                        });
+                    }
+                    animFrameId = requestAnimationFrame(renderLoop);
+                };
+
+                onMounted(() => {
+                    executeStep(0);
+                    nextTick(() => {
+                        calculateDrawArea();
+                        animFrameId = requestAnimationFrame(renderLoop);
+                    });
+                    window.addEventListener('resize', calculateDrawArea);
+                });
+
+                onUnmounted(() => {
+                    cancelAnimationFrame(animFrameId);
+                    clearTimeout(timer);
+                    window.removeEventListener('resize', calculateDrawArea);
+                });
+
+                return {
+                    mode, setMode, currentStep, maxSteps, stepsList,
+                    isAutoPlaying, toggleAutoPlay, playSpeed, step, reset,
+                    tlb, cache, hl, drawAreaHeight
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

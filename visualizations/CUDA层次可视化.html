@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPU CUDA Hierarchy Interactive Visualization</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX compilation in browser -->
+    <script crossorigin src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #0f172a; /* Slate 900 */
+            color: #f8fafc; /* Slate 50 */
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden; /* Prevent full body scroll, handle internally */
+        }
+        
+        #root {
+            height: 100%;
+        }
+
+        /* Custom Scrollbar for better dark mode look */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e293b; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b; 
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in {
+            animation: fadeIn 0.4s ease-out forwards;
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 0 0px rgba(56, 189, 248, 0.4); }
+            50% { box-shadow: 0 0 0 4px rgba(56, 189, 248, 0); }
+        }
+        .active-step-glow {
+            animation: pulse-glow 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Data Structure defining the steps of the visualization
+        const steps = [
+            {
+                id: 'gpu_sm',
+                title: "1. 物理层: GPU 与 SM",
+                concept: "硬件基础",
+                description: "GPU 芯片由多个流多处理器 (SM, Streaming Multiprocessor) 组成。SM 是执行计算的核心硬件单元。",
+                details: "当你启动一个 CUDA 程序时，工作被分配到这些 SM 上。一个 SM 可以同时处理多个 Block。",
+                color: "border-purple-500",
+                bgColor: "bg-purple-900/30"
+            },
+            {
+                id: 'grid_block',
+                title: "2. 逻辑层: Grid 与 Block",
+                concept: "软件映射",
+                description: "在代码中，你定义一个 Grid，它包含多个线程块 (Block)。",
+                details: "Grid 是整个任务，Block 是分配给特定 SM 的任务块。Block 内的线程可以通过共享内存协作。Grid 和 Block 通常可以组织成 1D, 2D, 或 3D 结构。",
+                color: "border-blue-500",
+                bgColor: "bg-blue-900/30"
+            },
+            {
+                id: 'thread_block_cluster',
+                title: "3. 现代协同层: Thread Block Cluster (线程块群)",
+                concept: "架构演进 (Hopper+)",
+                description: "Thread Block Cluster 是 Hopper 及 Blackwell 架构下新增的层级，介于 Grid 和 Block 之间。",
+                details: "它允许同一个 Cluster 内的多个 Block 在物理上被调度到同一个 GPC 的 SM 上，通过 SM 之间高带宽的双向分布式共享内存 (DSM) 进行单周期级的低延迟直接协作，无需通过显存绕路。",
+                color: "border-cyan-500",
+                bgColor: "bg-cyan-900/30"
+            },
+            {
+                id: 'block_warp',
+                title: "4. 调度层: Block 内的 Warp",
+                concept: "执行粒度",
+                description: "Block 在逻辑上包含很多线程，但在硬件执行时，SM 会将 Block 划分为 Warp (线程束)。",
+                details: "Warp 是 GPU 的最小执行单元。在 NVIDIA GPU 中，1 个 Warp = 32 个连续的线程。它们按照 SIMT (单指令多线程) 模式同时执行同一条指令。",
+                color: "border-orange-500",
+                bgColor: "bg-orange-900/30"
+            },
+            {
+                id: 'tile_concept',
+                title: "5. 协作层: Tile (分块)",
+                concept: "优化策略",
+                description: "Tile 是一个逻辑上的或编程模式上的概念，而非严格的硬件结构。它通常位于 Block 内部或跨 Warp 存在。",
+                details: "例如，在矩阵乘法优化中，为了更好地利用共享内存或利用新架构(如Volta+)中的协作组(Cooperative Groups)特性，程序员会将数据或计算划分为更小的 'Tile' (如 16x16 或 8x8)，使得这些线程子集紧密协作。此外，在现代 GPU（Hopper/Blackwell）中，配合 Tensor Core (WMMA/MMA) 和 TMA 的引入，Tile 已在硬件层面获得原生硬加速支持。",
+                color: "border-green-500",
+                bgColor: "bg-green-900/30"
+            },
+            {
+                id: 'thread',
+                title: "6. 基础层: Thread (线程)",
+                concept: "编程视角",
+                description: "Thread 是 CUDA 编程中最小的逻辑概念。",
+                details: "程序员编写处理单个数据点的代码，将其视作一个 Thread。每个 Thread 有独立的局部内存（Local Memory，物理上驻留在高延迟的外部显存中，主要用于寄存器溢出，性能较慢）和寄存器。但在实际执行中，它始终是某个 Warp 的 1/32。",
+                color: "border-red-500",
+                bgColor: "bg-red-900/30"
+            }
+        ];
+
+        const App = () => {
+            const [currentStep, setCurrentStep] = useState(0);
+            
+            // Handlers
+            const handleNext = () => {
+                if (currentStep < steps.length - 1) setCurrentStep(c => c + 1);
+            };
+            
+            const handlePrev = () => {
+                if (currentStep > 0) setCurrentStep(c => c - 1);
+            };
+            
+            const handleReset = () => {
+                setCurrentStep(0);
+            };
+
+            return (
+                <div className="flex flex-col h-full w-full bg-slate-900 text-slate-200">
+                    {/* Header */}
+                    <header className="flex-none p-6 border-b border-slate-700 bg-slate-800 shadow-md">
+                        <h1 className="text-2xl md:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">
+                            CUDA 层次结构及 Warp/Tile 解析
+                        </h1>
+                        <p className="text-slate-400 mt-2 text-sm md:text-base">
+                            探索从物理 GPU 硬件到逻辑线程执行的层次。重点关注 Warp 作为最小执行单元以及 Tile 的优化概念。
+                        </p>
+                    </header>
+
+                    {/* Main Content Area */}
+                    <main className="flex-1 overflow-hidden flex flex-col md:flex-row p-6 gap-6">
+                        
+                        {/* Left Side: Controls & Explanation Panel (Fixed layout) */}
+                        <div className="w-full md:w-1/3 flex flex-col gap-4 max-h-full">
+                            
+                            {/* Controls */}
+                            <div className="flex-none bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg flex justify-between items-center">
+                                <button 
+                                    onClick={handlePrev} 
+                                    disabled={currentStep === 0}
+                                    className={`px-4 py-2 rounded font-medium transition-colors ${currentStep === 0 ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+                                >
+                                    上一步
+                                </button>
+                                
+                                <span className="font-mono text-sm font-bold text-slate-300">
+                                    {currentStep + 1} / {steps.length}
+                                </span>
+
+                                <button 
+                                    onClick={handleNext} 
+                                    disabled={currentStep === steps.length - 1}
+                                    className={`px-4 py-2 rounded font-medium transition-colors ${currentStep === steps.length - 1 ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+                                >
+                                    下一步
+                                </button>
+                                
+                                <button 
+                                    onClick={handleReset} 
+                                    className="px-4 py-2 rounded font-medium bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors ml-2"
+                                >
+                                    重置
+                                </button>
+                            </div>
+
+                            {/* Info Panel (Height fixed relative to container to prevent jumping) */}
+                            <div className="flex-1 bg-slate-800 rounded-xl border border-slate-700 shadow-lg p-6 overflow-y-auto relative">
+                                {steps.map((step, index) => (
+                                    <div 
+                                        key={step.id} 
+                                        className={`absolute top-0 left-0 p-6 w-full transition-opacity duration-300 ${index === currentStep ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
+                                    >
+                                        <div className={`inline-block px-3 py-1 rounded-full text-xs font-bold mb-3 border ${step.color} ${step.bgColor}`}>
+                                            {step.concept}
+                                        </div>
+                                        <h2 className="text-xl font-bold mb-4 text-white">{step.title}</h2>
+                                        <div className="space-y-4 text-slate-300">
+                                            <p className="leading-relaxed font-medium bg-slate-700/50 p-3 rounded-lg border-l-4 border-slate-500">
+                                                {step.description}
+                                            </p>
+                                            <p className="leading-relaxed text-sm">
+                                                {step.details}
+                                            </p>
+                                        </div>
+                                        
+                                        {/* Specific contextual info based on step */}
+                                        {index === 2 && (
+                                            <div className="mt-6 p-4 bg-cyan-900/20 border border-cyan-500/30 rounded-lg animate-fade-in">
+                                                <h4 className="font-bold text-cyan-400 mb-2 flex items-center gap-2">
+                                                    <i data-lucide="network" className="w-4 h-4"></i>
+                                                    Cluster 的突破
+                                                </h4>
+                                                <p className="text-sm text-cyan-200">Cluster 突破了传统的“Block 之间老死不相往来”的物理屏障。通过分布式共享内存 (DSM)，不同 SM 上的 Block 可以极速直接读写对方的 Shared Memory，极大地提高了协作效率，适用于现代的大模型 Attention 计算优化。</p>
+                                            </div>
+                                        )}
+                                        {index === 3 && (
+                                            <div className="mt-6 p-4 bg-orange-900/20 border border-orange-500/30 rounded-lg animate-fade-in">
+                                                <h4 className="font-bold text-orange-400 mb-2 flex items-center gap-2">
+                                                    <i data-lucide="zap" className="w-4 h-4"></i>
+                                                    核心结论
+                                                </h4>
+                                                <p className="text-sm text-orange-200">Warp 是硬件实际调度和执行的最小单位。即使代码里写了单个线程的行为，硬件也是把 32 个线程打包在一起同进同退。</p>
+                                            </div>
+                                        )}
+                                        {index === 4 && (
+                                            <div className="mt-6 p-4 bg-green-900/20 border border-green-500/30 rounded-lg animate-fade-in">
+                                                <h4 className="font-bold text-green-400 mb-2 flex items-center gap-2">
+                                                    <i data-lucide="layers" className="w-4 h-4"></i>
+                                                    Tile 的意义
+                                                </h4>
+                                                <p className="text-sm text-green-200">Tile 更多是为了“数据局部性”而存在。将大块数据切分成适合 Shared Memory 存放的小块 (Tile)，让一小组线程 (可能跨Warp，也可能是Warp的子集) 集中处理，减少全局内存访问。</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Right Side: Visualization Area */}
+                        <div className="w-full md:w-2/3 bg-slate-950 rounded-xl border border-slate-800 shadow-inner p-4 relative overflow-hidden flex items-center justify-center">
+                            <Visualization currentStep={currentStep} />
+                        </div>
+                    </main>
+                </div>
+            );
+        };
+
+        // Separate component to handle the complex SVG/DOM rendering based on state
+        const Visualization = ({ currentStep }) => {
+            // Helper to determine visibility based on current step
+            const isVisible = (stepIndex) => currentStep >= stepIndex;
+
+            return (
+                <div className="w-full h-full relative flex items-center justify-center p-8">
+                    
+                    {/* Layer 1: GPU & SMs (Always visible but fades back) */}
+                    <div className={`transition-all duration-700 absolute w-[90%] h-[90%] border-4 border-purple-500/40 rounded-xl bg-purple-900/10 flex flex-col p-4
+                        ${currentStep === 0 ? 'scale-100 opacity-100' : 'scale-105 opacity-30 blur-sm pointer-events-none'}`}>
+                        <div className="absolute top-2 left-4 text-purple-400 font-bold text-lg tracking-wider">GPU 物理设备</div>
+                        
+                        <div className="flex-1 grid grid-cols-2 gap-4 mt-8">
+                            {/* SM 1 - The one we zoom into */}
+                            <div className="border-2 border-purple-400 rounded-lg bg-purple-800/30 relative flex flex-col items-center justify-center">
+                                <span className="absolute top-1 left-2 text-purple-300 text-sm font-semibold">SM 0</span>
+                                {currentStep === 0 && (
+                                    <div className="grid grid-cols-4 gap-1 p-4 w-full h-full opacity-50">
+                                        {[...Array(16)].map((_, i) => <div key={i} className="bg-purple-500/40 rounded-sm"></div>)}
+                                    </div>
+                                )}
+                            </div>
+                            {/* Other SMs */}
+                            {[1, 2, 3].map(i => (
+                                <div key={i} className="border border-purple-500/30 rounded-lg bg-purple-900/20 relative">
+                                     <span className="absolute top-1 left-2 text-purple-500/50 text-xs">SM {i}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Layer 2: Grid & Block (Zooms in over SM 0) */}
+                    <div className={`transition-all duration-700 absolute w-[80%] h-[80%] border-2 border-blue-500 rounded-lg bg-blue-900/20 flex flex-col p-2 shadow-2xl shadow-blue-900/50
+                        ${(currentStep === 1 || currentStep === 2) ? 'scale-100 opacity-100 z-10' : 
+                          currentStep > 2 ? 'scale-[1.1] opacity-20 blur-sm pointer-events-none' : 'scale-50 opacity-0 pointer-events-none'}`}>
+                        <div className="absolute -top-3 left-4 px-2 bg-slate-900 text-blue-400 font-bold text-sm border border-blue-500 rounded">
+                            {currentStep === 2 ? "Grid 逻辑视图 -> Thread Block Cluster" : "Grid 逻辑视图 (映射到GPU)"}
+                        </div>
+                        
+                        <div className="flex-1 grid grid-cols-3 gap-3 mt-4 p-2 relative">
+                            {/* Block (0,0) - The one we focus on */}
+                            <div className={`transition-all duration-300 rounded relative flex items-center justify-center group overflow-hidden
+                                ${currentStep === 2 ? 'border-2 border-cyan-400 bg-cyan-950/40 shadow-[0_0_15px_rgba(34,211,238,0.3)]' : 'border-2 border-blue-400 bg-blue-800/40'}`}>
+                                <span className="absolute top-1 left-1 bg-blue-900/80 px-1 text-blue-200 text-xs rounded z-10">Block(0,0)</span>
+                                {/* Representation of threads inside before zooming */}
+                                {(currentStep === 1 || currentStep === 2) && (
+                                    <div className="absolute inset-2 grid grid-cols-8 gap-[1px] opacity-60">
+                                        {[...Array(64)].map((_, i) => <div key={i} className="bg-blue-300/40 rounded-[1px]"></div>)}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Block (0,1) - For showing Cluster DSM cooperation */}
+                            <div className={`transition-all duration-300 rounded relative flex items-center justify-center group overflow-hidden
+                                ${currentStep === 2 ? 'border-2 border-cyan-400 bg-cyan-950/40 shadow-[0_0_15px_rgba(34,211,238,0.3)]' : 'border border-blue-600/40 bg-blue-900/20'}`}>
+                                <span className="absolute top-1 left-1 bg-blue-900/80 px-1 text-blue-200 text-xs rounded z-10">Block(0,1)</span>
+                                {(currentStep === 1 || currentStep === 2) && (
+                                    <div className="absolute inset-2 grid grid-cols-8 gap-[1px] opacity-20">
+                                        {[...Array(64)].map((_, i) => <div key={i} className="bg-blue-300/40 rounded-[1px]"></div>)}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Other Blocks */}
+                            {[...Array(4)].map((_, i) => (
+                                <div key={i} className="border border-blue-600/40 bg-blue-900/20 rounded relative">
+                                    <span className="absolute top-1 left-1 text-blue-600/50 text-[10px]">Block(0,{i+2})</span>
+                                </div>
+                            ))}
+
+                            {/* DSM direct channel indicator when currentStep === 2 */}
+                            {currentStep === 2 && (
+                                <div className="absolute top-[20%] bottom-[20%] left-[25%] right-[25%] pointer-events-none flex items-center justify-center z-20">
+                                    <div className="bg-cyan-500/90 text-slate-900 text-[10px] font-bold py-1 px-2 rounded-full border border-cyan-300 shadow-lg animate-pulse flex items-center gap-1">
+                                        <span>←</span>
+                                        <span>DSM (分布式共享内存) 高速协作</span>
+                                        <span>→</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Layer 3: Inside a Block -> Warps */}
+                    <div className={`transition-all duration-700 absolute w-[70%] h-[70%] border border-orange-500 rounded bg-slate-900 flex flex-col p-4 shadow-[0_0_30px_rgba(249,115,22,0.2)]
+                        ${currentStep === 3 ? 'scale-100 opacity-100 z-20' : 
+                          currentStep > 3 ? 'scale-[1.1] opacity-20 blur-[2px] pointer-events-none' : 'scale-50 opacity-0 pointer-events-none'}`}>
+                        <div className="absolute -top-3 left-4 px-2 bg-slate-900 text-orange-400 font-bold text-sm border border-orange-500 rounded">Block(0,0) 内部调度机制</div>
+                        
+                        <div className="flex-1 flex flex-col gap-3 mt-4">
+                            <div className="text-xs text-orange-200/70 mb-1">SM 会将 Block 拆分成包含 32 个线程的 Warp</div>
+                            
+                            {/* Warp 0 - Active */}
+                            <div className="flex-1 border-2 border-orange-400 rounded bg-orange-900/30 relative flex flex-col p-2 animate-fade-in">
+                                <div className="flex justify-between items-center mb-1">
+                                    <span className="bg-orange-600 text-white text-[10px] px-2 py-0.5 rounded font-bold">Warp 0 (正在执行)</span>
+                                    <span className="text-[10px] text-orange-300">最小执行单元 (32 Threads)</span>
+                                </div>
+                                <div className="flex-1 flex gap-[2px]">
+                                    {/* SIMT visualization: all threads executing same instruction */}
+                                    <div className="w-full relative h-full flex flex-col justify-center">
+                                         {/* The instruction bar */}
+                                         <div className="absolute top-1/2 -translate-y-1/2 left-0 w-full h-1 bg-orange-400/50 z-0"></div>
+                                         <div className="grid grid-cols-16 md:grid-cols-32 gap-[2px] h-3/4 z-10 w-full px-1">
+                                            {[...Array(32)].map((_, i) => (
+                                                <div key={i} className="bg-orange-400 rounded-sm h-full w-full relative group">
+                                                    {/* Tooltip on hover */}
+                                                    <div className="hidden group-hover:block absolute -top-6 left-1/2 -translate-x-1/2 bg-black text-white text-[8px] px-1 rounded z-50 whitespace-nowrap">
+                                                        T{i}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Warp 1 - Waiting */}
+                            <div className="flex-1 border border-slate-600 rounded bg-slate-800/50 relative flex flex-col p-2 opacity-60">
+                                <span className="text-slate-400 text-[10px] px-2 py-0.5 rounded font-bold self-start">Warp 1 (挂起/等待访存)</span>
+                                <div className="flex-1 grid grid-cols-16 md:grid-cols-32 gap-[2px] mt-1">
+                                     {[...Array(32)].map((_, i) => <div key={i} className="bg-slate-600 rounded-[1px] h-full w-full"></div>)}
+                                </div>
+                            </div>
+                            
+                            {/* Warp 2 - Waiting */}
+                            <div className="flex-1 border border-slate-600 rounded bg-slate-800/50 relative flex flex-col p-2 opacity-40">
+                                <span className="text-slate-400 text-[10px] px-2 py-0.5 rounded font-bold self-start">Warp 2 (未就绪)</span>
+                                <div className="flex-1 grid grid-cols-16 md:grid-cols-32 gap-[2px] mt-1">
+                                     {[...Array(32)].map((_, i) => <div key={i} className="bg-slate-600 rounded-[1px] h-full w-full"></div>)}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Layer 4: Tile Concept (Overlaying Warps) */}
+                    <div className={`transition-all duration-700 absolute w-[75%] h-[60%] border-2 border-green-500 rounded-lg bg-green-900/10 backdrop-blur-[1px] flex flex-col p-4 shadow-[0_0_40px_rgba(34,197,94,0.15)] z-30
+                        ${currentStep === 4 ? 'scale-100 opacity-100' : 
+                          currentStep > 4 ? 'scale-[1.1] opacity-30 pointer-events-none' : 'scale-50 opacity-0 pointer-events-none'}`}>
+                        <div className="absolute -top-3 right-8 px-2 bg-slate-900 text-green-400 font-bold text-sm border border-green-500 rounded flex items-center gap-1">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg>
+                            Tile 逻辑分块视图
+                        </div>
+                        
+                        <div className="w-full h-full flex items-center justify-center mt-2 relative">
+                            {/* Abstract representation of Threads forming a Tile, crossing Warp boundaries sometimes */}
+                            <div className="absolute inset-0 flex flex-col gap-1 p-2 opacity-30">
+                                {/* Ghosted Warps in background */}
+                                <div className="h-1/3 w-full border border-orange-500/30 border-dashed rounded bg-orange-900/20"></div>
+                                <div className="h-1/3 w-full border border-orange-500/30 border-dashed rounded bg-orange-900/20"></div>
+                            </div>
+                            
+                            {/* The Tile Highlight */}
+                            <div className="relative z-10 w-2/3 h-2/3 border-2 border-green-400 bg-green-800/40 rounded flex flex-col justify-between p-2">
+                                <div className="text-center text-green-300 text-xs font-bold bg-green-900/80 rounded py-0.5 px-2 self-start mb-2">
+                                    Shared Memory Tile (例如 16x16 数据块)
+                                </div>
+                                <div className="flex-1 grid grid-cols-8 grid-rows-4 gap-1 p-1 border border-green-500/30 bg-black/40 rounded">
+                                    {/* Threads assigned to this specific Tile, could be from different warps */}
+                                    {[...Array(32)].map((_, i) => (
+                                        <div key={i} className={`rounded-[1px] ${i < 16 ? 'bg-orange-400' : 'bg-orange-300'} flex items-center justify-center text-[6px] text-black font-bold`}>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="text-xs text-green-200 mt-2 text-center">
+                                    一组线程集中处理一块小数据，实现数据复用
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Layer 5: Single Thread Details */}
+                    <div className={`transition-all duration-700 absolute w-[50%] h-[50%] border-2 border-red-500 rounded bg-slate-800 flex flex-col shadow-[0_0_50px_rgba(239,68,68,0.3)] z-40
+                        ${currentStep === 5 ? 'scale-100 opacity-100' : 'scale-50 opacity-0 pointer-events-none'}`}>
+                        
+                        <div className="bg-red-900/80 p-2 border-b border-red-500 flex justify-between items-center rounded-t">
+                            <span className="font-bold text-red-200 text-sm flex items-center gap-2">
+                                <div className="w-3 h-3 bg-red-400 rounded-full animate-pulse"></div>
+                                单个 Thread (线程) 视角
+                            </span>
+                        </div>
+                        
+                        <div className="flex-1 p-4 flex flex-col gap-4">
+                            <div className="flex gap-4 h-1/2">
+                                {/* Registers */}
+                                <div className="flex-1 border border-red-500/50 bg-slate-900 rounded p-2 flex flex-col">
+                                    <span className="text-[10px] text-red-300 border-b border-red-500/30 pb-1 mb-1">Registers (私有寄存器)</span>
+                                    <div className="flex-1 grid grid-cols-2 gap-1 mt-1">
+                                        <div className="bg-red-800/40 border border-red-700 rounded-sm"></div>
+                                        <div className="bg-red-800/40 border border-red-700 rounded-sm"></div>
+                                        <div className="bg-red-800/40 border border-red-700 rounded-sm"></div>
+                                        <div className="bg-red-800/40 border border-red-700 rounded-sm"></div>
+                                    </div>
+                                </div>
+                                {/* Local Memory */}
+                                <div className="flex-1 border border-blue-500/50 bg-slate-900 rounded p-2 flex flex-col">
+                                    <span className="text-[10px] text-blue-300 border-b border-blue-500/30 pb-1 mb-1">Local Memory</span>
+                                    <div className="flex-1 flex items-center justify-center opacity-50">
+                                        <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div className="h-1/2 border border-slate-600 bg-black/50 rounded p-3 flex flex-col relative overflow-hidden">
+                                <span className="text-xs text-slate-400 mb-2 font-mono">CUDA Code Context:</span>
+                                <div className="font-mono text-[10px] text-green-400 leading-tight">
+                                    int tx = threadIdx.x;<br/>
+                                    int ty = threadIdx.y;<br/>
+                                    // 程序员眼中的独立执行流<br/>
+                                    float val = data[ty * width + tx];<br/>
+                                    <span className="text-yellow-400 animate-pulse">// 实际：作为 Warp 的 1/32 执行</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+
+        // Initialize Lucide icons
+        setTimeout(() => {
+            if(window.lucide) {
+                window.lucide.createIcons();
+            }
+        }, 100);
+    </script>
+</body>
+</html>

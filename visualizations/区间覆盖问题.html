@@ -7,7 +7,7 @@
     <!-- 引入 React, ReactDOM 和 Babel -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script crossorigin src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
     <!-- 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -61,6 +61,10 @@
             while (currentStart < target.e) {
                 // 寻找候选区间 (左端点 <= currentStart 且未被选中)
                 let candidates = [];
+                // 学术提示：此处的每次重置指针为 0 进行全局扫描是简化教学演示的实现，
+                // 会使算法的时间复杂度在最坏情况下退化为 O(N^2)。
+                // 在标准的高效实现中，因为区间已经按照起点升序排序，我们可以使用单向移动的双指针，
+                // 仅扫描一次区间数组（加上排序的 O(N log N)，总体复杂度为 O(N log N)）。
                 let tempPointer = 0; // 为演示直观，每次全局扫描符合条件的未使用区间
                 
                 while (tempPointer < intervals.length) {

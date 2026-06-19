@@ -10,7 +10,7 @@
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <!-- 引入 Babel 编译 JSX -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script crossorigin src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
         .canvas-container {
@@ -70,7 +70,10 @@
             });
 
             while (forest.length > 1) {
-                // 贪心策略：按频率排序，取最小的两个
+                // 学术提示：此处每次循环都进行全量排序（forest.sort）仅为了简化教学演示实现。
+                // 在标准的 Huffman 编码算法中，应使用最小堆（优先队列）来动态维护森林，
+                // 这样每次提取最小节点和插入新节点的时间复杂度为 O(log N)，总时间复杂度为 O(N log N)。
+                // 当前每次循环进行 O(N log N) 的全量排序，总时间复杂度会退化为 O(N^2 log N)。
                 forest.sort((a, b) => a.freq - b.freq);
                 const left = forest.shift();
                 const right = forest.shift();

@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>0-1背包问题可视化教学</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; color: #1f2937; }
+        .dp-table-cell { transition: all 0.3s ease; }
+        .highlight-cell { background-color: #fef08a !important; transform: scale(1.05); border: 2px solid #eab308; z-index: 10; position: relative;}
+        .highlight-source { background-color: #bfdbfe !important; border: 2px solid #3b82f6;}
+        .highlight-item { border-color: #eab308 !important; box-shadow: 0 0 10px rgba(234, 179, 8, 0.5); }
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.5s ease; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
+        
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden flex flex-col">
+    <div id="app" class="flex flex-col h-full w-full">
+        <!-- 头部 -->
+        <header class="bg-indigo-600 text-white p-4 shadow-md z-10 shrink-0">
+            <div class="max-w-7xl mx-auto flex justify-between items-center">
+                <h1 class="text-2xl font-bold">算法经典：0-1 背包问题</h1>
+                <div class="space-x-2">
+                    <button @click="reset" class="px-4 py-2 bg-indigo-500 hover:bg-indigo-400 rounded transition font-medium">重置演示</button>
+                    <button @click="prevStep" :disabled="currentStep === 0" class="px-4 py-2 bg-gray-500 hover:bg-gray-400 rounded transition disabled:opacity-50 font-medium">上一步</button>
+                    <button @click="nextStep" :disabled="isFinished" class="px-4 py-2 bg-green-500 hover:bg-green-400 rounded transition disabled:opacity-50 font-medium text-white shadow-sm">
+                        {{ isFinished ? '演示完成' : '单步执行 (下一步)' }}
+                    </button>
+                    <button @click="autoPlayToggle" class="px-4 py-2 bg-blue-500 hover:bg-blue-400 rounded transition font-medium">
+                        {{ autoPlayInterval ? '暂停自动播放' : '自动播放' }}
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- 主内容区 -->
+        <main class="flex-1 flex overflow-hidden max-w-screen-2xl mx-auto w-full p-4 gap-4">
+            
+            <!-- 左侧：理论讲解与状态说明 -->
+            <div class="w-1/3 flex flex-col gap-4 overflow-y-auto pr-2 pb-4">
+                <!-- 算法简介卡片 -->
+                <div class="bg-white rounded-lg shadow-sm p-5 border border-gray-200 shrink-0">
+                    <h2 class="text-xl font-bold text-indigo-700 mb-3 border-b pb-2">问题描述</h2>
+                    <p class="text-sm leading-relaxed mb-2">
+                        有一个容量为 <strong class="text-blue-600">W = {{ backpackCapacity }}</strong> 的背包。
+                        现有 <strong class="text-green-600">N = {{ items.length }}</strong> 个物品，每个物品有一个重量和一个价值。
+                    </p>
+                    <p class="text-sm leading-relaxed mb-2 font-medium text-red-600">
+                        "0-1" 的含义：每个物品只有两种选择：放入背包(1) 或 不放入背包(0)。不能只放物品的一部分。
+                    </p>
+                    <p class="text-sm leading-relaxed font-bold">
+                        目标：在不超过背包容量的前提下，装入的物品总价值最大。
+                    </p>
+                </div>
+
+                <!-- 状态转移方程说明 -->
+                <div class="bg-white rounded-lg shadow-sm p-5 border border-gray-200 shrink-0">
+                    <h2 class="text-xl font-bold text-indigo-700 mb-3 border-b pb-2">核心：状态转移方程</h2>
+                    <p class="text-sm mb-2">设 <code class="bg-gray-100 px-1 rounded text-red-600 font-mono">dp[i][j]</code> 表示：前 <code class="font-mono font-bold">i</code> 个物品，放入容量为 <code class="font-mono font-bold">j</code> 的背包中，所能获得的最大价值。</p>
+                    
+                    <div class="bg-gray-50 p-3 rounded border border-gray-200 my-3 text-sm font-mono leading-loose">
+                        <div v-if="!isComputing">初始状态：等待开始...</div>
+                        <div v-else>
+                            <div class="mb-1 text-gray-500">对于当前物品 i={{currentI}}, 重量 w={{items[currentI-1].weight}}, 价值 v={{items[currentI-1].value}}, 当前背包容量 j={{currentJ}} :</div>
+                            
+                            <!-- 情况1：装不下 -->
+                            <div :class="{'bg-yellow-100 p-1 rounded font-bold': activeEquation === 'skip_heavy'}">
+                                1. 若 j &lt; w (当前容量 <span class="text-red-500 font-bold">{{currentJ}} &lt; {{items[currentI-1].weight}}</span>，装不下):<br>
+                                &nbsp;&nbsp;&nbsp;dp[i][j] = dp[i-1][j]
+                            </div>
+                            
+                            <!-- 情况2：装得下 -->
+                            <div class="mt-2" :class="{'bg-yellow-100 p-1 rounded font-bold': activeEquation === 'choose'}">
+                                2. 若 j &ge; w (当前容量 <span class="text-green-600 font-bold">{{currentJ}} &ge; {{items[currentI-1].weight}}</span>，可以装):<br>
+                                &nbsp;&nbsp;&nbsp;dp[i][j] = max(<br>
+                                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span :class="{'text-blue-600 font-bold bg-blue-50 px-1': highlightCalc === 'not_pick'}">dp[i-1][j]</span>, <span class="text-gray-500">// 不装该物品</span><br>
+                                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span :class="{'text-blue-600 font-bold bg-blue-50 px-1': highlightCalc === 'pick'}">dp[i-1][j-w] + v</span> <span class="text-gray-500">// 装入该物品</span><br>
+                                &nbsp;&nbsp;&nbsp;)
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 当前执行步骤解析 (动态变化) -->
+                <div class="bg-indigo-50 rounded-lg shadow-sm p-5 border border-indigo-200 flex-1 flex flex-col">
+                    <h2 class="text-xl font-bold text-indigo-800 mb-3 border-b border-indigo-200 pb-2">当前步骤解析</h2>
+                    <div class="overflow-y-auto flex-1">
+                        <transition name="fade" mode="out-in">
+                            <div :key="stepDescription" class="text-sm leading-relaxed whitespace-pre-line text-gray-800">
+                                {{ stepDescription }}
+                            </div>
+                        </transition>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧：可视化区 (物品列表 + DP表格) -->
+            <div class="w-2/3 flex flex-col gap-4 overflow-hidden">
+                
+                <!-- 物品列表区 -->
+                <div class="bg-white rounded-lg shadow-sm p-4 border border-gray-200 shrink-0">
+                    <h2 class="text-lg font-bold text-gray-700 mb-2">可选物品池 (共 {{items.length}} 个)</h2>
+                    <div class="flex flex-wrap gap-3">
+                        <div v-for="(item, index) in items" :key="index" 
+                             class="flex flex-col border-2 rounded-lg p-2 w-24 text-center bg-gray-50 transition-all duration-300"
+                             :class="{'highlight-item bg-yellow-50': currentI === index + 1 && isComputing}">
+                            <div class="font-bold text-gray-800 border-b pb-1 mb-1">物品 {{ index + 1 }}</div>
+                            <div class="text-xs text-gray-600">重量(w): <span class="font-bold text-blue-600 text-sm">{{ item.weight }}</span></div>
+                            <div class="text-xs text-gray-600">价值(v): <span class="font-bold text-green-600 text-sm">{{ item.value }}</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- DP 表格区 -->
+                <div class="bg-white rounded-lg shadow-sm p-4 border border-gray-200 flex-1 flex flex-col overflow-hidden">
+                    <div class="flex justify-between items-end mb-2 shrink-0">
+                        <h2 class="text-lg font-bold text-gray-700">DP 状态表格 <span class="text-sm font-normal text-gray-500 ml-2">(行: 前i个物品，列: 背包容量j)</span></h2>
+                        <div class="flex gap-4 text-xs">
+                            <div class="flex items-center"><span class="w-3 h-3 bg-yellow-200 border border-yellow-500 inline-block mr-1"></span>当前计算目标</div>
+                            <div class="flex items-center"><span class="w-3 h-3 bg-blue-200 border border-blue-500 inline-block mr-1"></span>依赖的历史状态</div>
+                        </div>
+                    </div>
+                    
+                    <div class="overflow-auto flex-1 border border-gray-300 rounded">
+                        <table class="min-w-full text-center border-collapse">
+                            <thead class="bg-gray-100 sticky top-0 z-20 shadow-sm">
+                                <tr>
+                                    <th class="p-2 border border-gray-300 w-24 bg-gray-200 font-medium">物品i \ 容量j</th>
+                                    <th v-for="j in backpackCapacity + 1" :key="j" 
+                                        class="p-2 border border-gray-300 w-12 font-mono"
+                                        :class="{'bg-yellow-200 text-yellow-800 font-bold': currentJ === j - 1 && isComputing}">
+                                        {{ j - 1 }}
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="(row, i) in dp" :key="i">
+                                    <td class="p-2 border border-gray-300 font-medium bg-gray-50 sticky left-0 z-10"
+                                        :class="{'bg-yellow-200 text-yellow-800 font-bold': currentI === i && isComputing}">
+                                        <div v-if="i === 0">i=0 (无物品)</div>
+                                        <div v-else class="flex flex-col leading-tight">
+                                            <span>i={{ i }}</span>
+                                            <span class="text-xs text-gray-500">(w:{{items[i-1].weight}}, v:{{items[i-1].value}})</span>
+                                        </div>
+                                    </td>
+                                    
+                                    <td v-for="(cellValue, j) in row" :key="j" 
+                                        class="p-2 border border-gray-300 dp-table-cell font-mono relative h-12"
+                                        :class="getCellClass(i, j)">
+                                        <!-- 单元格数值 -->
+                                        <span v-if="cellValue !== null" class="z-10 relative">{{ cellValue }}</span>
+                                        <span v-else class="text-gray-300 z-10 relative">-</span>
+                                        
+                                        <!-- 推导动画提示 (选或不选的来源) -->
+                                        <div v-if="isComputing && currentI === i && currentJ === j && showCalculation" 
+                                             class="absolute inset-0 flex items-center justify-center opacity-20 pointer-events-none">
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 结果展示区 -->
+                <div v-if="isFinished" class="bg-green-50 rounded-lg shadow-sm p-4 border border-green-200 shrink-0 animate-pulse">
+                    <h2 class="text-xl font-bold text-green-800 mb-1">计算完成！</h2>
+                    <p class="text-lg">最大总价值为：<strong class="text-3xl text-red-600">{{ dp[items.length][backpackCapacity] }}</strong></p>
+                    <p class="text-sm text-green-700 mt-1">此结果位于表格右下角 dp[{{items.length}}][{{backpackCapacity}}]。</p>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, watch, onMounted, onUnmounted } = Vue;
+
+        createApp({
+            setup() {
+                // --- 配置数据 ---
+                const backpackCapacity = 8;
+                // 一个稍微复杂且有代表性的例子
+                const items = [
+                    { weight: 2, value: 3 },
+                    { weight: 3, value: 4 },
+                    { weight: 4, value: 5 },
+                    { weight: 5, value: 8 }
+                ];
+
+                // --- 状态数据 ---
+                const dp = ref([]); // 二维数组存储状态
+                const currentI = ref(0); // 当前考虑的前 i 个物品
+                const currentJ = ref(0); // 当前考虑的背包容量 j
+                const currentStep = ref(0); // 总步数追踪
+                const isFinished = ref(false); // 是否完成
+                const autoPlayInterval = ref(null);
+                
+                // --- 动画/高亮控制状态 ---
+                const stepState = ref('init'); // init, check_capacity, calc_not_pick, calc_pick, compare_update
+                const stepDescription = ref('点击 "单步执行" 或 "自动播放" 开始演示。\n\n我们将初始化一个二维表格 dp[i][j]。\ni 表示可选的前 i 个物品，j 表示当前背包容量。\n\n第一步是初始化边界条件：当 i=0(没有物品) 或 j=0(容量为0) 时，最大价值都是 0。');
+                
+                // 初始化 DP 表格，全部填 null
+                const initDPTable = () => {
+                    let table = [];
+                    for (let i = 0; i <= items.length; i++) {
+                        table[i] = new Array(backpackCapacity + 1).fill(null);
+                    }
+                    dp.value = table;
+                };
+
+                // --- 历史记录 (为了实现"上一步"功能) ---
+                const history = ref([]);
+
+                const saveState = () => {
+                    history.value.push({
+                        dp: JSON.parse(JSON.stringify(dp.value)),
+                        currentI: currentI.value,
+                        currentJ: currentJ.value,
+                        stepState: stepState.value,
+                        stepDescription: stepDescription.value,
+                        isFinished: isFinished.value
+                    });
+                };
+
+                // --- 核心逻辑控制 ---
+                const isComputing = computed(() => currentI.value > 0 && !isFinished.value);
+                
+                // 决定左侧公式高亮
+                const activeEquation = computed(() => {
+                    if (!isComputing.value) return '';
+                    const w = items[currentI.value - 1].weight;
+                    if (currentJ.value < w) return 'skip_heavy';
+                    return 'choose';
+                });
+
+                const highlightCalc = computed(() => {
+                    if (stepState.value === 'calc_not_pick') return 'not_pick';
+                    if (stepState.value === 'calc_pick') return 'pick';
+                    return '';
+                });
+
+                // --- 执行步骤 ---
+                const nextStep = () => {
+                    if (isFinished.value) return;
+                    saveState();
+                    currentStep.value++;
+
+                    // 阶段 0: 初始化第 0 行和第 0 列为 0
+                    if (currentI.value === 0 && currentJ.value === 0) {
+                        for(let i=0; i<=items.length; i++) dp.value[i][0] = 0;
+                        for(let j=0; j<=backpackCapacity; j++) dp.value[0][j] = 0;
+                        currentI.value = 1;
+                        currentJ.value = 1;
+                        stepState.value = 'check_capacity';
+                        generateDescription();
+                        return;
+                    }
+
+                    // 如果当前行计算完毕，移动到下一行
+                    if (currentJ.value > backpackCapacity) {
+                        currentI.value++;
+                        currentJ.value = 1;
+                        if (currentI.value > items.length) {
+                            isFinished.value = true;
+                            stepDescription.value = "🎉 演示完成！\n\n所有的状态均已计算完毕。最终结果位于表格右下角。\n根据状态转移方程，我们找出了在不超过容量限制下的最优解。";
+                            return;
+                        }
+                        stepState.value = 'check_capacity';
+                        generateDescription();
+                        return;
+                    }
+
+                    // 核心计算逻辑拆分成微小步骤以便动画展示
+                    const i = currentI.value;
+                    const j = currentJ.value;
+                    const w = items[i - 1].weight;
+                    const v = items[i - 1].value;
+
+                    if (stepState.value === 'check_capacity') {
+                        if (j < w) {
+                            // 装不下
+                            dp.value[i][j] = dp.value[i - 1][j];
+                            stepState.value = 'update_done'; // 直接跳到更新完成
+                        } else {
+                            // 装得下，准备比较
+                            stepState.value = 'calc_not_pick';
+                        }
+                    } else if (stepState.value === 'calc_not_pick') {
+                        stepState.value = 'calc_pick';
+                    } else if (stepState.value === 'calc_pick') {
+                        stepState.value = 'compare_update';
+                    } else if (stepState.value === 'compare_update') {
+                        const valNotPick = dp.value[i - 1][j];
+                        const valPick = dp.value[i - 1][j - w] + v;
+                        dp.value[i][j] = Math.max(valNotPick, valPick);
+                        stepState.value = 'update_done';
+                    } else if (stepState.value === 'update_done') {
+                        // 准备计算下一个格子
+                        currentJ.value++;
+                        if (currentJ.value <= backpackCapacity) {
+                             stepState.value = 'check_capacity';
+                        }
+                    }
+                    generateDescription();
+                };
+
+                const prevStep = () => {
+                    if (history.value.length === 0) return;
+                    const lastState = history.value.pop();
+                    dp.value = lastState.dp;
+                    currentI.value = lastState.currentI;
+                    currentJ.value = lastState.currentJ;
+                    stepState.value = lastState.stepState;
+                    stepDescription.value = lastState.stepDescription;
+                    isFinished.value = lastState.isFinished;
+                    currentStep.value--;
+                };
+
+                const reset = () => {
+                    pauseAutoPlay();
+                    initDPTable();
+                    currentI.value = 0;
+                    currentJ.value = 0;
+                    currentStep.value = 0;
+                    isFinished.value = false;
+                    history.value = [];
+                    stepState.value = 'init';
+                    stepDescription.value = '点击 "单步执行" 或 "自动播放" 开始演示。\n\n我们将初始化一个二维表格 dp[i][j]。\ni 表示可选的前 i 个物品，j 表示当前背包容量。\n\n第一步是初始化边界条件：当 i=0(没有物品) 或 j=0(容量为0) 时，最大价值都是 0。';
+                };
+
+                // --- 动态生成文字描述 ---
+                const generateDescription = () => {
+                    if (isFinished.value) return;
+                    if (currentI.value === 0) return; // 不应发生
+
+                    const i = currentI.value;
+                    const j = currentJ.value;
+                    if (j > backpackCapacity) return; // 过渡状态
+                    
+                    const item = items[i - 1];
+                    let desc = `👉 当前目标：计算 dp[${i}][${j}]\n`;
+                    desc += `正在考虑前 ${i} 个物品，当前背包容量剩余 ${j}。\n`;
+                    desc += `当前物品 ${i}：重量 w=${item.weight}, 价值 v=${item.value}。\n\n`;
+
+                    if (stepState.value === 'check_capacity') {
+                        desc += `🔍 检查容量：\n当前背包容量 j=${j}，物品重量 w=${item.weight}。\n`;
+                        if (j < item.weight) {
+                            desc += `⛔ 容量不足 (${j} < ${item.weight})，无法装入该物品。\n`;
+                            desc += `💡 结论：只能选择不装。最大价值等于考虑前 ${i-1} 个物品时的价值。\n即 dp[${i}][${j}] = dp[${i-1}][${j}]`;
+                        } else {
+                            desc += `✅ 容量充足 (${j} >= ${item.weight})，可以装入该物品。\n`;
+                            desc += `💡 接下来我们需要比较两种策略："不装入" 和 "装入"，取其中的最大值。`;
+                        }
+                    } else if (stepState.value === 'calc_not_pick') {
+                        desc += `策略 1️⃣：不装入物品 ${i}\n`;
+                        desc += `如果我们不装入它，背包容量仍为 ${j}。\n`;
+                        desc += `最大价值依赖于只考虑前 ${i-1} 个物品时的状态：\n`;
+                        desc += `👉 dp[${i-1}][${j}] = ${dp.value[i-1][j]}`;
+                    } else if (stepState.value === 'calc_pick') {
+                        desc += `策略 2️⃣：装入物品 ${i}\n`;
+                        desc += `如果装入它，我们将获得价值 v=${item.value}。\n`;
+                        desc += `但我们需要腾出重量 w=${item.weight} 的空间。\n`;
+                        desc += `因此要加上容量为 ${j - item.weight} 时，前 ${i-1} 个物品的最大价值：\n`;
+                        desc += `👉 dp[${i-1}][${j - item.weight}] + v \n`;
+                        desc += `= ${dp.value[i-1][j - item.weight]} + ${item.value} = ${dp.value[i-1][j - item.weight] + item.value}`;
+                    } else if (stepState.value === 'compare_update') {
+                        const valNotPick = dp.value[i - 1][j];
+                        const valPick = dp.value[i - 1][j - item.weight] + item.value;
+                        desc += `⚖️ 对比并更新结果：\n`;
+                        desc += `不装的价值：${valNotPick}\n`;
+                        desc += `装入的价值：${valPick}\n\n`;
+                        desc += `取最大值：Max(${valNotPick}, ${valPick}) = ${Math.max(valNotPick, valPick)}\n`;
+                        desc += `👉 填入表格 dp[${i}][${j}]`;
+                    } else if (stepState.value === 'update_done') {
+                        desc += `✅ 单元格 dp[${i}][${j}] 计算完成。\n值为：${dp.value[i][j]}。\n\n准备计算下一个状态...`;
+                    }
+
+                    stepDescription.value = desc;
+                };
+
+                // --- 表格单元格样式控制 ---
+                const getCellClass = (i, j) => {
+                    // 默认已计算的单元格背景
+                    let classes = { 'bg-white': i > 0 && j > 0 && dp.value[i][j] !== null };
+
+                    // 突出显示当前正在计算的单元格
+                    if (isComputing.value && currentI.value === i && currentJ.value === j) {
+                        classes['highlight-cell'] = true;
+                        classes['font-bold'] = true;
+                    }
+
+                    // 突出显示依赖的历史状态 (用于动画演示)
+                    if (isComputing.value && currentI.value > 0) {
+                        const ci = currentI.value;
+                        const cj = currentJ.value;
+                        const w = items[ci - 1] ? items[ci - 1].weight : 0;
+
+                        // 根据状态机决定高亮哪个源数据
+                        if (stepState.value === 'update_done' && ci===i && cj===j) {
+                            // 计算完成瞬间，高亮自身一下 (通过transition)
+                        } 
+                        else if (i === ci - 1) { // 总是依赖上一行
+                            if (cj < w) {
+                                // 容量不足，只依赖正上方
+                                if (j === cj && (stepState.value === 'check_capacity' || stepState.value === 'update_done')) classes['highlight-source'] = true;
+                            } else {
+                                // 容量足，依赖两个
+                                if (stepState.value === 'calc_not_pick' && j === cj) classes['highlight-source'] = true;
+                                if (stepState.value === 'calc_pick' && j === cj - w) classes['highlight-source'] = true;
+                                if (stepState.value === 'compare_update' && (j === cj || j === cj - w)) classes['highlight-source'] = true;
+                            }
+                        }
+                    }
+                    return classes;
+                };
+
+                // --- 自动播放功能 ---
+                const autoPlayToggle = () => {
+                    if (autoPlayInterval.value) {
+                        pauseAutoPlay();
+                    } else {
+                        if (isFinished.value) reset();
+                        autoPlayInterval.value = setInterval(() => {
+                            if (isFinished.value) {
+                                pauseAutoPlay();
+                            } else {
+                                nextStep();
+                            }
+                        }, 1200); // 调整此值控制播放速度
+                    }
+                };
+
+                const pauseAutoPlay = () => {
+                    if (autoPlayInterval.value) {
+                        clearInterval(autoPlayInterval.value);
+                        autoPlayInterval.value = null;
+                    }
+                };
+
+                // 生命周期
+                onMounted(() => {
+                    initDPTable();
+                });
+                onUnmounted(() => {
+                    pauseAutoPlay();
+                });
+
+                return {
+                    backpackCapacity, items, dp,
+                    currentI, currentJ, currentStep, isFinished,
+                    stepDescription, stepState, activeEquation, highlightCalc,
+                    isComputing, autoPlayInterval,
+                    nextStep, prevStep, reset, autoPlayToggle, getCellClass
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

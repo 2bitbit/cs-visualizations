@@ -3,10 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>矩阵连乘与三角剖分同构可视化</title>
+    <title>矩阵连乘与三角剖分同构可视化 (修正版)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* 隐藏的文本默认不可见 */
         .svg-text-hidden { display: none; }
         .svg-text-visible { display: block; }
     </style>
@@ -14,23 +13,20 @@
 <body class="min-h-screen bg-gray-50 p-8 font-sans text-gray-800 flex flex-col items-center">
 
     <div class="max-w-5xl w-full">
-        <!-- 标题区 -->
         <div class="mb-8 text-center">
             <h1 class="text-3xl font-bold mb-2 text-gray-900">代数与几何的同构映射</h1>
             <p class="text-gray-600">
                 可视化验证：4个矩阵连乘 <span class="font-mono bg-gray-200 px-1 rounded">(M₁×M₂) × (M₃×M₄)</span> 与 5边形三角剖分的精确对应
             </p>
-            <p class="text-sm text-gray-500 mt-2">提示：将鼠标平滑悬停在下方卡片或图形区域上查看对应关系</p>
+            <p class="text-sm text-gray-500 mt-2">提示：将鼠标平滑悬停在下方卡片或图形区域上查看对应关系（已严格区分维度与代价）</p>
         </div>
 
-        <!-- 可视化主区域 -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
             
-            <!-- 左侧：代数结构（矩阵乘法二叉树） -->
+            <!-- 左侧：代数结构 -->
             <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center">
                 <h2 class="text-xl font-semibold mb-6">代数结构：矩阵连乘树</h2>
                 <svg viewBox="0 0 300 280" class="w-full max-w-sm">
-                    <!-- 连线 -->
                     <line id="line-root-left" x1="150" y1="50" x2="75" y2="120" class="stroke-2 transition-colors duration-300 stroke-gray-300" />
                     <line id="line-root-right" x1="150" y1="50" x2="225" y2="120" class="stroke-2 transition-colors duration-300 stroke-gray-300" />
                     
@@ -40,7 +36,6 @@
                     <line id="line-right-m3" x1="225" y1="120" x2="180" y2="220" class="stroke-2 transition-colors duration-300 stroke-gray-200" />
                     <line id="line-right-m4" x1="225" y1="120" x2="270" y2="220" class="stroke-2 transition-colors duration-300 stroke-gray-200" />
 
-                    <!-- 叶子节点 (原始矩阵) -->
                     <g class="text-xs font-mono pointer-events-none">
                         <rect x="15" y="220" width="30" height="20" rx="4" class="fill-gray-100 stroke-gray-300 stroke-2 pointer-events-auto" />
                         <text x="30" y="234" text-anchor="middle" class="fill-gray-700">M₁</text>
@@ -55,69 +50,60 @@
                         <text x="270" y="234" text-anchor="middle" class="fill-gray-700">M₄</text>
                     </g>
 
-                    <!-- 内部节点：左子树合并 -->
-                    <!-- 修复点：将悬停事件绑定在矩形上，文字添加 pointer-events-none -->
+                    <!-- 左子树合并 -->
                     <g>
-                        <rect id="tree-rect-left" data-target="left" x="40" y="100" width="70" height="40" rx="6" class="hover-trigger cursor-pointer fill-gray-50 stroke-gray-300 stroke-2 transition-colors duration-300" />
-                        <text x="75" y="118" text-anchor="middle" class="tree-text-left text-sm font-bold font-mono text-gray-600 pointer-events-none transition-colors duration-300">M₁×M₂</text>
-                        <text x="75" y="132" text-anchor="middle" class="tree-text-left text-xs font-mono text-gray-600 opacity-80 pointer-events-none transition-colors duration-300">P₀×P₂</text>
+                        <rect id="tree-rect-left" data-target="left" x="25" y="90" width="100" height="50" rx="6" class="hover-trigger cursor-pointer fill-gray-50 stroke-gray-300 stroke-2 transition-colors duration-300" />
+                        <text x="75" y="105" text-anchor="middle" class="tree-text-left text-sm font-bold font-mono text-gray-600 pointer-events-none transition-colors duration-300">M₁×M₂</text>
+                        <text x="75" y="120" text-anchor="middle" class="tree-text-left text-[10px] font-mono text-gray-600 opacity-80 pointer-events-none transition-colors duration-300">维度: P₀×P₂</text>
+                        <text x="75" y="132" text-anchor="middle" class="tree-text-left text-[10px] font-mono text-gray-600 opacity-80 pointer-events-none transition-colors duration-300">代价: P₀×P₁×P₂</text>
                     </g>
 
-                    <!-- 内部节点：右子树合并 -->
+                    <!-- 右子树合并 -->
                     <g>
-                        <rect id="tree-rect-right" data-target="right" x="190" y="100" width="70" height="40" rx="6" class="hover-trigger cursor-pointer fill-gray-50 stroke-gray-300 stroke-2 transition-colors duration-300" />
-                        <text x="225" y="118" text-anchor="middle" class="tree-text-right text-sm font-bold font-mono text-gray-600 pointer-events-none transition-colors duration-300">M₃×M₄</text>
-                        <text x="225" y="132" text-anchor="middle" class="tree-text-right text-xs font-mono text-gray-600 opacity-80 pointer-events-none transition-colors duration-300">P₂×P₄</text>
+                        <rect id="tree-rect-right" data-target="right" x="175" y="90" width="100" height="50" rx="6" class="hover-trigger cursor-pointer fill-gray-50 stroke-gray-300 stroke-2 transition-colors duration-300" />
+                        <text x="225" y="105" text-anchor="middle" class="tree-text-right text-sm font-bold font-mono text-gray-600 pointer-events-none transition-colors duration-300">M₃×M₄</text>
+                        <text x="225" y="120" text-anchor="middle" class="tree-text-right text-[10px] font-mono text-gray-600 opacity-80 pointer-events-none transition-colors duration-300">维度: P₂×P₄</text>
+                        <text x="225" y="132" text-anchor="middle" class="tree-text-right text-[10px] font-mono text-gray-600 opacity-80 pointer-events-none transition-colors duration-300">代价: P₂×P₃×P₄</text>
                     </g>
 
-                    <!-- 根节点：最终合并 -->
+                    <!-- 根节点合并 -->
                     <g>
-                        <rect id="tree-rect-root" data-target="root" x="80" y="20" width="140" height="50" rx="8" class="hover-trigger cursor-pointer fill-gray-50 stroke-gray-300 stroke-2 transition-colors duration-300" />
-                        <text x="150" y="40" text-anchor="middle" class="tree-text-root text-sm font-bold font-mono text-gray-600 pointer-events-none transition-colors duration-300">(M₁M₂)×(M₃M₄)</text>
-                        <text x="150" y="58" text-anchor="middle" class="tree-text-root text-xs font-mono text-gray-600 pointer-events-none transition-colors duration-300">代价: P₀×P₂×P₄</text>
+                        <rect id="tree-rect-root" data-target="root" x="80" y="10" width="140" height="55" rx="8" class="hover-trigger cursor-pointer fill-gray-50 stroke-gray-300 stroke-2 transition-colors duration-300" />
+                        <text x="150" y="28" text-anchor="middle" class="tree-text-root text-sm font-bold font-mono text-gray-600 pointer-events-none transition-colors duration-300">(M₁M₂)×(M₃M₄)</text>
+                        <text x="150" y="44" text-anchor="middle" class="tree-text-root text-xs font-mono text-gray-600 pointer-events-none transition-colors duration-300">维度: P₀×P₄</text>
+                        <text x="150" y="58" text-anchor="middle" class="tree-text-root text-xs font-mono text-gray-600 pointer-events-none transition-colors duration-300">动作代价: P₀×P₂×P₄</text>
                     </g>
                 </svg>
             </div>
 
-            <!-- 右侧：几何结构（多边形三角剖分） -->
+            <!-- 右侧：几何结构 (保持不变，几何映射原作者是对的) -->
             <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center">
                 <h2 class="text-xl font-semibold mb-6">几何结构：五边形剖分</h2>
                 <svg viewBox="0 0 300 280" class="w-full max-w-sm">
-                    <!-- 背景五边形轮廓底色 -->
                     <polygon points="80,240 40,110 150,30 260,110 220,240" class="fill-gray-50 stroke-gray-300 stroke-[3px] pointer-events-none" />
 
-                    <!-- 三角形：T1 (对应 M1 x M2) -->
-                    <!-- 修复点：直接在 polygon 上监听，确保面积足够大，不会因为间隙闪烁 -->
                     <polygon id="poly-left" data-target="left" points="80,240 40,110 150,30" class="hover-trigger cursor-pointer fill-transparent stroke-transparent stroke-2 transition-all duration-300" />
-                    <text id="poly-text-left" x="90" y="130" class="fill-blue-700 font-mono text-sm font-bold pointer-events-none svg-text-hidden">M₁×M₂</text>
+                    <text id="poly-text-left" x="90" y="130" class="fill-blue-700 font-mono text-sm font-bold pointer-events-none svg-text-hidden">代价: P₀P₁P₂</text>
 
-                    <!-- 三角形：T2 (对应 M3 x M4) -->
                     <polygon id="poly-right" data-target="right" points="150,30 260,110 220,240" class="hover-trigger cursor-pointer fill-transparent stroke-transparent stroke-2 transition-all duration-300" />
-                    <text id="poly-text-right" x="210" y="130" class="fill-green-700 font-mono text-sm font-bold pointer-events-none svg-text-hidden">M₃×M₄</text>
+                    <text id="poly-text-right" x="200" y="130" class="fill-green-700 font-mono text-sm font-bold pointer-events-none svg-text-hidden">代价: P₂P₃P₄</text>
 
-                    <!-- 三角形：T_root (对应最终合并) -->
                     <polygon id="poly-root" data-target="root" points="80,240 150,30 220,240" class="hover-trigger cursor-pointer fill-transparent stroke-transparent stroke-2 transition-all duration-300" />
-                    <text id="poly-text-root" x="150" y="160" text-anchor="middle" class="fill-orange-700 font-mono text-sm font-bold pointer-events-none svg-text-hidden">最后一次相乘</text>
+                    <text id="poly-text-root" x="150" y="160" text-anchor="middle" class="fill-orange-700 font-mono text-sm font-bold pointer-events-none svg-text-hidden">代价: P₀P₂P₄</text>
 
-                    <!-- 绘制顶点与标签 (全部添加 pointer-events-none 避免干扰悬停) -->
                     <g class="font-mono text-sm font-bold pointer-events-none">
                         <circle id="v0-circle" cx="80" cy="240" r="6" class="fill-white stroke-2 stroke-gray-800 transition-colors duration-300" />
                         <text x="60" y="255" class="fill-gray-800">v₀(P₀)</text>
-                        
                         <circle id="v1-circle" cx="40" cy="110" r="6" class="fill-white stroke-2 stroke-gray-800 transition-colors duration-300" />
                         <text x="5" y="115" class="fill-gray-800">v₁(P₁)</text>
-                        
                         <circle id="v2-circle" cx="150" cy="30" r="6" class="fill-white stroke-2 stroke-gray-800 transition-colors duration-300" />
                         <text x="150" y="15" text-anchor="middle" class="fill-gray-800">v₂(P₂)</text>
-                        
                         <circle id="v3-circle" cx="260" cy="110" r="6" class="fill-white stroke-2 stroke-gray-800 transition-colors duration-300" />
                         <text x="270" y="115" class="fill-gray-800">v₃(P₃)</text>
-                        
                         <circle id="v4-circle" cx="220" cy="240" r="6" class="fill-white stroke-2 stroke-gray-800 transition-colors duration-300" />
                         <text x="235" y="255" class="fill-gray-800">v₄(P₄)</text>
                     </g>
 
-                    <!-- 绘制边代表矩阵 -->
                     <g class="pointer-events-none">
                         <text x="50" y="185" class="fill-gray-500 font-mono text-xs font-bold" style="transform: rotate(-60deg); transform-origin: 50px 185px;">M₁</text>
                         <text x="100" y="65" class="fill-gray-500 font-mono text-xs font-bold" style="transform: rotate(-30deg); transform-origin: 100px 65px;">M₂</text>
@@ -128,44 +114,47 @@
             </div>
         </div>
 
-        <!-- 交互说明区 -->
+        <!-- 卡片说明区：修复了表述 -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div id="card-left" data-target="left" class="hover-trigger p-4 rounded-lg border border-gray-200 bg-white transition-all cursor-default">
                 <h3 id="card-title-left" class="font-bold mb-2 flex items-center text-gray-700 transition-colors">
                     <span class="inline-block w-3 h-3 rounded-full bg-blue-400 mr-2"></span>
-                    左子树 / 左侧三角形
+                    左侧操作
                 </h3>
                 <p class="text-sm text-gray-600 mb-2">
-                    <strong>代数操作：</strong> 计算 <span class="font-mono bg-white px-1 rounded border border-gray-100">M₁ × M₂</span>，得到维度为 <span class="font-mono bg-white px-1 rounded border border-gray-100">P₀ × P₂</span> 的新矩阵。
+                    <strong>当前动作：</strong> 计算 M₁ × M₂。<br/>
+                    <strong>生成维度：</strong> <span class="font-mono text-blue-600 font-bold">P₀ × P₂</span> (对应弦 v₀v₂)。
                 </p>
                 <p class="text-sm text-gray-600">
-                    <strong>几何映射：</strong> 连接弦 <span class="font-mono bg-white px-1 rounded border border-gray-100">v₀v₂</span>，切出由顶点 <span class="font-mono bg-white px-1 rounded border border-gray-100">v₀, v₁, v₂</span> 构成的三角形。
+                    <strong>单步代价：</strong> 标量乘法次数为 <span class="font-mono text-blue-600 font-bold">P₀ × P₁ × P₂</span>，完全等价于切出以 v₀, v₁, v₂ 为顶点的三角形！
                 </p>
             </div>
 
             <div id="card-right" data-target="right" class="hover-trigger p-4 rounded-lg border border-gray-200 bg-white transition-all cursor-default">
                 <h3 id="card-title-right" class="font-bold mb-2 flex items-center text-gray-700 transition-colors">
                     <span class="inline-block w-3 h-3 rounded-full bg-green-400 mr-2"></span>
-                    右子树 / 右侧三角形
+                    右侧操作
                 </h3>
                 <p class="text-sm text-gray-600 mb-2">
-                    <strong>代数操作：</strong> 计算 <span class="font-mono bg-white px-1 rounded border border-gray-100">M₃ × M₄</span>，得到维度为 <span class="font-mono bg-white px-1 rounded border border-gray-100">P₂ × P₄</span> 的新矩阵。
+                    <strong>当前动作：</strong> 计算 M₃ × M₄。<br/>
+                    <strong>生成维度：</strong> <span class="font-mono text-green-600 font-bold">P₂ × P₄</span> (对应弦 v₂v₄)。
                 </p>
                 <p class="text-sm text-gray-600">
-                    <strong>几何映射：</strong> 连接弦 <span class="font-mono bg-white px-1 rounded border border-gray-100">v₂v₄</span>，切出由顶点 <span class="font-mono bg-white px-1 rounded border border-gray-100">v₂, v₃, v₄</span> 构成的三角形。
+                    <strong>单步代价：</strong> 标量乘法次数为 <span class="font-mono text-green-600 font-bold">P₂ × P₃ × P₄</span>，完全等价于切出以 v₂, v₃, v₄ 为顶点的三角形！
                 </p>
             </div>
 
             <div id="card-root" data-target="root" class="hover-trigger p-4 rounded-lg border border-gray-200 bg-white transition-all cursor-default">
                 <h3 id="card-title-root" class="font-bold mb-2 flex items-center text-gray-700 transition-colors">
                     <span class="inline-block w-3 h-3 rounded-full bg-orange-400 mr-2"></span>
-                    根节点 / 中心大三角形
+                    根节点(最后合并)
                 </h3>
                 <p class="text-sm text-gray-600 mb-2">
-                    <strong>代数操作：</strong> 最终合并操作，涉及维度参数 <span class="font-mono bg-white px-1 rounded border border-gray-100 text-orange-600 font-bold">P₀, P₂, P₄</span>。
+                    <strong>当前动作：</strong> 结果相乘 (M₁M₂) × (M₃M₄)。<br/>
+                    <strong>生成维度：</strong> 最终矩阵维度为 <span class="font-mono text-orange-600 font-bold">P₀ × P₄</span>。
                 </p>
                 <p class="text-sm text-gray-600">
-                    <strong>几何映射：</strong> 剩余的区域恰好构成一个由顶点 <span class="font-mono bg-white px-1 rounded border border-gray-100 text-orange-600 font-bold">v₀, v₂, v₄</span> 组成的三角形，对应最后相乘所需的三个维度！
+                    <strong>单步代价：</strong> 这一步动作代价为 <span class="font-mono text-orange-600 font-bold">P₀ × P₂ × P₄</span>，完美对应了多边形中剩下的那个中心大三角形！
                 </p>
             </div>
         </div>
@@ -173,7 +162,6 @@
     </div>
 
     <script>
-        // 配置状态和样式映射
         let activeNode = null;
 
         const colors = {
@@ -190,7 +178,6 @@
             return colors.default;
         }
 
-        // 核心更新函数
         function updateUI(targetNode) {
             activeNode = targetNode;
             const nodes = ['left', 'right', 'root'];
@@ -198,34 +185,30 @@
             nodes.forEach(node => {
                 const style = getStyle(node);
                 
-                // 1. 更新卡片
                 const card = document.getElementById(`card-${node}`);
                 const title = document.getElementById(`card-title-${node}`);
                 card.className = `hover-trigger p-4 rounded-lg border transition-all cursor-default ${style.bg} ${style.cardBorder}`;
                 title.className = `font-bold mb-2 flex items-center transition-colors ${activeNode === node ? style.text : 'text-gray-700'}`;
 
-                // 2. 更新树状图节点
                 const treeRect = document.getElementById(`tree-rect-${node}`);
                 treeRect.setAttribute('class', `hover-trigger cursor-pointer stroke-2 transition-colors duration-300 ${style.fill} ${style.stroke}`);
                 
                 const treeTexts = document.querySelectorAll(`.tree-text-${node}`);
                 treeTexts.forEach(t => {
                     const isSmall = t.classList.contains('text-sm');
-                    t.setAttribute('class', `tree-text-${node} font-mono pointer-events-none transition-colors duration-300 ${style.text} ${isSmall ? 'text-sm font-bold' : 'text-xs opacity-80'}`);
+                    const isExtraSmall = t.classList.contains('text-[10px]');
+                    t.setAttribute('class', `tree-text-${node} font-mono pointer-events-none transition-colors duration-300 ${style.text} ${isSmall ? 'text-sm font-bold' : isExtraSmall ? 'text-[10px] opacity-80' : 'text-xs opacity-80'}`);
                 });
 
-                // 3. 更新多边形三角形
                 const poly = document.getElementById(`poly-${node}`);
                 const polyStyleFill = activeNode === node ? style.fill : 'fill-transparent';
                 const polyStyleStroke = activeNode === node ? style.stroke : 'stroke-transparent';
                 poly.setAttribute('class', `hover-trigger cursor-pointer stroke-2 transition-all duration-300 ${polyStyleFill} ${polyStyleStroke}`);
                 
-                // 文本显隐
                 const polyText = document.getElementById(`poly-text-${node}`);
                 polyText.className = `fill-${node === 'left' ? 'blue' : node === 'right' ? 'green' : 'orange'}-700 font-mono text-sm font-bold pointer-events-none ${activeNode === node ? 'svg-text-visible' : 'svg-text-hidden'}`;
             });
 
-            // 4. 更新特定连线
             document.getElementById('line-root-left').setAttribute('class', `stroke-2 transition-colors duration-300 ${activeNode === 'root' || activeNode === 'left' ? 'stroke-blue-400' : 'stroke-gray-300'}`);
             document.getElementById('line-root-right').setAttribute('class', `stroke-2 transition-colors duration-300 ${activeNode === 'root' || activeNode === 'right' ? 'stroke-green-400' : 'stroke-gray-300'}`);
             
@@ -237,7 +220,6 @@
             document.getElementById('line-right-m3').setAttribute('class', `stroke-2 transition-colors duration-300 ${rightLineColor}`);
             document.getElementById('line-right-m4').setAttribute('class', `stroke-2 transition-colors duration-300 ${rightLineColor}`);
 
-            // 5. 更新顶点圆圈
             document.getElementById('v0-circle').setAttribute('class', `fill-white stroke-2 transition-colors duration-300 ${activeNode === 'root' || activeNode === 'left' ? 'stroke-orange-500' : 'stroke-gray-800'}`);
             document.getElementById('v1-circle').setAttribute('class', `fill-white stroke-2 transition-colors duration-300 ${activeNode === 'left' ? 'stroke-blue-500' : 'stroke-gray-800'}`);
             document.getElementById('v2-circle').setAttribute('class', `fill-white stroke-2 transition-colors duration-300 ${activeNode ? 'stroke-orange-500' : 'stroke-gray-800'}`);
@@ -245,34 +227,20 @@
             document.getElementById('v4-circle').setAttribute('class', `fill-white stroke-2 transition-colors duration-300 ${activeNode === 'root' || activeNode === 'right' ? 'stroke-orange-500' : 'stroke-gray-800'}`);
         }
 
-        // 绑定事件监听器
         document.addEventListener('DOMContentLoaded', () => {
             const triggers = document.querySelectorAll('.hover-trigger');
-            
             triggers.forEach(trigger => {
-                // 鼠标交互
-                trigger.addEventListener('mouseenter', (e) => {
-                    const target = e.currentTarget.getAttribute('data-target');
-                    updateUI(target);
-                });
-                trigger.addEventListener('mouseleave', () => {
-                    updateUI(null);
-                });
-
-                // 触摸屏移动端支持
+                trigger.addEventListener('mouseenter', (e) => updateUI(e.currentTarget.getAttribute('data-target')));
+                trigger.addEventListener('mouseleave', () => updateUI(null));
                 trigger.addEventListener('touchstart', (e) => {
-                    // 阻止默认行为以防某些浏览器模拟鼠标事件触发双击
                     e.preventDefault(); 
                     const target = e.currentTarget.getAttribute('data-target');
                     updateUI(activeNode === target ? null : target);
                 }, { passive: false });
             });
             
-            // 点击外部空白处取消高亮 (针对移动端)
             document.addEventListener('touchstart', (e) => {
-                if (!e.target.closest('.hover-trigger')) {
-                    updateUI(null);
-                }
+                if (!e.target.closest('.hover-trigger')) updateUI(null);
             }, { passive: true });
         });
     </script>

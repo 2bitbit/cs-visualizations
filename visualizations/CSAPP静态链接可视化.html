@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSAPP 静态链接动态可视化</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        body {
+            background-color: #0f172a; /* slate-900 */
+            color: #e2e8f0; /* slate-200 */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        /* 核心动画：变大并改变颜色，随后恢复原尺寸，但保持柔和的高亮底色和边框，不破坏原有字体颜色 */
+        @keyframes pop-focus {
+            0%   { transform: scale(1); z-index: 10; box-shadow: 0 0 0 transparent; background-color: transparent; border-color: transparent; }
+            30%  { transform: scale(1.05); z-index: 50; box-shadow: 0 4px 15px rgba(251, 191, 36, 0.15); background-color: rgba(251, 191, 36, 0.25); border-color: rgba(251, 191, 36, 0.6); }
+            70%  { transform: scale(1.05); z-index: 50; box-shadow: 0 4px 15px rgba(251, 191, 36, 0.15); background-color: rgba(251, 191, 36, 0.25); border-color: rgba(251, 191, 36, 0.6); }
+            100% { transform: scale(1); z-index: 10; box-shadow: 0 0 0 transparent; background-color: rgba(251, 191, 36, 0.15); border-color: rgba(251, 191, 36, 0.4); }
+        }
+
+        .step-active {
+            animation: pop-focus 0.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+
+        /* 可执行文件占位符过渡 */
+        .fade-enter-active, .fade-leave-active {
+            transition: opacity 0.8s ease;
+        }
+        .fade-enter-from, .fade-leave-to {
+            opacity: 0;
+        }
+        .fade-enter-to, .fade-leave-from {
+            opacity: 1;
+        }
+
+        /* 确保固定高度和滚动条样式 */
+        .fixed-panel {
+            height: 600px;
+            overflow-y: hidden;
+        }
+        
+        .code-font {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.85rem;
+        }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+    </style>
+</head>
+<body>
+
+<div id="app" class="w-[1400px] h-[900px] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl flex flex-col overflow-hidden relative">
+    
+    <!-- 顶部控制栏 -->
+    <div class="h-16 bg-slate-800 border-b border-slate-700 flex items-center justify-between px-6 shrink-0">
+        <h1 class="text-xl font-bold text-white flex items-center gap-2">
+            <span class="bg-blue-600 text-white px-2 py-1 rounded text-sm">CSAPP</span>
+            静态链接核心机制演示 (Static Linking)
+        </h1>
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2 mr-4">
+                <span class="text-xs text-slate-400">播放速度</span>
+                <input type="range" min="1000" max="4000" step="500" v-model.number="speed" class="w-24 cursor-pointer" style="direction: rtl;">
+                <span class="text-xs text-slate-400">{{ speed / 1000 }}s</span>
+            </div>
+            <button @click="reset" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm transition-colors">重置</button>
+            <button @click="prevStep" :disabled="step === 0" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm transition-colors">上一步</button>
+            <button @click="togglePlay" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-sm font-bold shadow-lg transition-colors w-24 text-center">
+                {{ isPlaying ? '暂停' : '自动播放' }}
+            </button>
+            <button @click="nextStep" :disabled="step === maxSteps" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm transition-colors">下一步</button>
+        </div>
+    </div>
+
+    <!-- 信息展示栏 (进度条与当前步骤说明) -->
+    <div class="h-28 bg-slate-800 border-b border-slate-700 flex flex-col shrink-0">
+        <!-- 进度条 -->
+        <div class="flex h-2 bg-slate-700 w-full">
+            <div class="bg-blue-500 transition-all duration-300" :style="{ width: (step / maxSteps) * 100 + '%' }"></div>
+        </div>
+        <!-- 步骤说明 -->
+        <div class="flex-1 px-8 py-4 flex flex-col justify-center">
+            <div class="text-amber-400 font-bold mb-1 text-sm tracking-wider uppercase">Step {{ step }} / {{ maxSteps }}</div>
+            <div class="text-lg text-white font-medium" v-html="currentStepInfo.title"></div>
+            <div class="text-sm text-slate-300 mt-1" v-html="currentStepInfo.desc"></div>
+        </div>
+    </div>
+
+    <!-- 主画布区域 (绝对固定的三栏布局) -->
+    <div class="flex-1 flex bg-slate-900 p-4 gap-4">
+        
+        <!-- 左侧：main.o -->
+        <div class="flex-1 bg-slate-800 rounded-lg border border-slate-700 p-3 flex flex-col fixed-panel code-font">
+            <div class="text-center font-bold text-blue-400 mb-2 border-b border-slate-700 pb-2 bg-slate-800/80 sticky top-0 z-20">
+                可重定位目标文件: main.o
+            </div>
+            
+            <div class="flex-1 overflow-y-auto pr-2 space-y-4">
+                <!-- Sections -->
+                <div>
+                    <div class="text-xs text-slate-400 mb-1">ELF Sections</div>
+                    <div class="border border-slate-600 rounded bg-slate-900 overflow-hidden">
+                        <div class="bg-slate-700 px-2 py-1 text-xs text-slate-300 border-b border-slate-600 font-bold">.text (代码段)</div>
+                        <div class="p-2 space-y-1">
+                            <div class="text-slate-500">0000: 48 83 ec 08 &nbsp;&nbsp;&nbsp; sub $0x8, %rsp</div>
+                            <div :class="getClass('main-text-call')" class="px-1 border border-transparent rounded transition-all duration-300 flex justify-between">
+                                <span>0004: e8 <span class="text-red-400">00 00 00 00</span></span>
+                                <span class="text-slate-400">callq &lt;swap&gt;</span>
+                            </div>
+                            <div class="text-slate-500">0009: b8 00 00 00 00 &nbsp; mov $0x0, %eax</div>
+                            <div class="text-slate-500">...</div>
+                        </div>
+                    </div>
+                    
+                    <div class="border border-slate-600 rounded bg-slate-900 mt-2 overflow-hidden">
+                        <div class="bg-slate-700 px-2 py-1 text-xs text-slate-300 border-b border-slate-600 font-bold">.data (数据段)</div>
+                        <div class="p-2 space-y-1">
+                            <div :class="getClass('main-data-buf')" class="px-1 border border-transparent rounded transition-all duration-300 flex justify-between">
+                                <span>0000: <span class="text-green-400">01 00 00 00 02 00 00 00</span></span>
+                                <span class="text-slate-400">buf = {1, 2}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Symbol Table -->
+                <div>
+                    <div class="text-xs text-slate-400 mb-1">.symtab (符号表)</div>
+                    <table class="w-full text-left text-xs border-collapse">
+                        <thead>
+                            <tr class="bg-slate-700 text-slate-300">
+                                <th class="p-1 border border-slate-600">符号 (Name)</th>
+                                <th class="p-1 border border-slate-600">节 (Section)</th>
+                                <th class="p-1 border border-slate-600">类型 (Type)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr :class="getClass('main-sym-main')" class="border border-transparent transition-all duration-300">
+                                <td class="p-1 border border-slate-700">main</td>
+                                <td class="p-1 border border-slate-700 text-blue-400">.text (Def)</td>
+                                <td class="p-1 border border-slate-700">FUNC</td>
+                            </tr>
+                            <tr :class="getClass('main-sym-buf')" class="border border-transparent transition-all duration-300">
+                                <td class="p-1 border border-slate-700 font-bold">buf</td>
+                                <td class="p-1 border border-slate-700 text-blue-400">.data (Def)</td>
+                                <td class="p-1 border border-slate-700">OBJ</td>
+                            </tr>
+                            <tr :class="getClass('main-sym-swap')" class="border border-transparent transition-all duration-300">
+                                <td class="p-1 border border-slate-700 font-bold">swap</td>
+                                <td class="p-1 border border-slate-700 text-red-400">UNDEF (Ref)</td>
+                                <td class="p-1 border border-slate-700">NOTYPE</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Relocation Entries -->
+                <div>
+                    <div class="text-xs text-slate-400 mb-1">.rela.text (重定位条目)</div>
+                    <table class="w-full text-left text-xs border-collapse">
+                        <thead>
+                            <tr class="bg-slate-700 text-slate-300">
+                                <th class="p-1 border border-slate-600">偏移量</th>
+                                <th class="p-1 border border-slate-600">符号</th>
+                                <th class="p-1 border border-slate-600">类型</th>
+                                <th class="p-1 border border-slate-600">加数</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr :class="getClass('main-reloc-swap')" class="border border-transparent transition-all duration-300">
+                                <td class="p-1 border border-slate-700 text-amber-400">0x5</td>
+                                <td class="p-1 border border-slate-700">swap</td>
+                                <td class="p-1 border border-slate-700">R_X86_64_PC32</td>
+                                <td class="p-1 border border-slate-700 text-pink-400">-4</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 中间：swap.o -->
+        <div class="flex-1 bg-slate-800 rounded-lg border border-slate-700 p-3 flex flex-col fixed-panel code-font">
+            <div class="text-center font-bold text-green-400 mb-2 border-b border-slate-700 pb-2 bg-slate-800/80 sticky top-0 z-20">
+                可重定位目标文件: swap.o
+            </div>
+            
+            <div class="flex-1 overflow-y-auto pr-2 space-y-4">
+                <!-- Sections -->
+                <div>
+                    <div class="text-xs text-slate-400 mb-1">ELF Sections</div>
+                    <div class="border border-slate-600 rounded bg-slate-900 overflow-hidden">
+                        <div class="bg-slate-700 px-2 py-1 text-xs text-slate-300 border-b border-slate-600 font-bold">.text (代码段)</div>
+                        <div class="p-2 space-y-1">
+                            <div class="text-slate-500">0000: 55 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; push %rbp</div>
+                            <div class="text-slate-500">0001: 48 89 e5 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; mov %rsp, %rbp</div>
+                            <div class="text-slate-500">...</div>
+                            <div class="text-slate-500">0020: c3 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; retq</div>
+                        </div>
+                    </div>
+                    
+                    <div class="border border-slate-600 rounded bg-slate-900 mt-2 overflow-hidden">
+                        <div class="bg-slate-700 px-2 py-1 text-xs text-slate-300 border-b border-slate-600 font-bold">.data (数据段)</div>
+                        <div class="p-2 space-y-1">
+                            <div :class="getClass('swap-data-bufp0')" class="px-1 border border-transparent rounded transition-all duration-300 flex justify-between">
+                                <span>0000: <span class="text-red-400">00 00 00 00 00 00 00 00</span></span>
+                                <span class="text-slate-400">*bufp0 = &buf</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Symbol Table -->
+                <div>
+                    <div class="text-xs text-slate-400 mb-1">.symtab (符号表)</div>
+                    <table class="w-full text-left text-xs border-collapse">
+                        <thead>
+                            <tr class="bg-slate-700 text-slate-300">
+                                <th class="p-1 border border-slate-600">符号 (Name)</th>
+                                <th class="p-1 border border-slate-600">节 (Section)</th>
+                                <th class="p-1 border border-slate-600">类型 (Type)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr :class="getClass('swap-sym-swap')" class="border border-transparent transition-all duration-300">
+                                <td class="p-1 border border-slate-700 font-bold">swap</td>
+                                <td class="p-1 border border-slate-700 text-green-400">.text (Def)</td>
+                                <td class="p-1 border border-slate-700">FUNC</td>
+                            </tr>
+                            <tr :class="getClass('swap-sym-bufp0')" class="border border-transparent transition-all duration-300">
+                                <td class="p-1 border border-slate-700">bufp0</td>
+                                <td class="p-1 border border-slate-700 text-green-400">.data (Def)</td>
+                                <td class="p-1 border border-slate-700">OBJ</td>
+                            </tr>
+                            <tr :class="getClass('swap-sym-buf')" class="border border-transparent transition-all duration-300">
+                                <td class="p-1 border border-slate-700 font-bold">buf</td>
+                                <td class="p-1 border border-slate-700 text-red-400">UNDEF (Ref)</td>
+                                <td class="p-1 border border-slate-700">NOTYPE</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Relocation Entries -->
+                <div>
+                    <div class="text-xs text-slate-400 mb-1">.rela.data (重定位条目)</div>
+                    <table class="w-full text-left text-xs border-collapse">
+                        <thead>
+                            <tr class="bg-slate-700 text-slate-300">
+                                <th class="p-1 border border-slate-600">偏移量</th>
+                                <th class="p-1 border border-slate-600">符号</th>
+                                <th class="p-1 border border-slate-600">类型</th>
+                                <th class="p-1 border border-slate-600">加数</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr :class="getClass('swap-reloc-buf')" class="border border-transparent transition-all duration-300">
+                                <td class="p-1 border border-slate-700 text-amber-400">0x0</td>
+                                <td class="p-1 border border-slate-700">buf</td>
+                                <td class="p-1 border border-slate-700">R_X86_64_64</td>
+                                <td class="p-1 border border-slate-700 text-pink-400">0</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：prog (Executable) -->
+        <div class="flex-1 bg-slate-800 rounded-lg border border-slate-700 p-3 flex flex-col fixed-panel code-font relative">
+            <div class="text-center font-bold text-amber-400 mb-2 border-b border-slate-700 pb-2 bg-slate-800/80 sticky top-0 z-20">
+                可执行目标文件: prog
+            </div>
+            
+            <!-- 使用透明度过渡，保持布局固定 -->
+            <transition name="fade">
+                <div v-show="step >= 3" class="flex-1 overflow-y-auto pr-2 space-y-4">
+                    
+                    <!-- Merged Sections -->
+                    <div>
+                        <div class="text-xs text-slate-400 mb-1">合并后的节与运行时地址 (Absolute Address)</div>
+                        
+                        <!-- Prog .text -->
+                        <div class="border border-slate-600 rounded bg-slate-900 overflow-hidden">
+                            <div class="bg-slate-700 px-2 py-1 text-xs text-slate-300 border-b border-slate-600 font-bold flex justify-between">
+                                <span>.text (合并后的代码段)</span>
+                                <span class="text-amber-400 font-mono">Base: 0x400000</span>
+                            </div>
+                            <!-- 来自 main.o -->
+                            <div :class="getClass('prog-text-main')" class="p-2 space-y-1 border-l-4 border-blue-500 bg-blue-900/10 transition-all duration-300">
+                                <div class="text-xs text-slate-500 italic mb-1">// 拷贝自 main.o</div>
+                                <div class="text-slate-500">400000: 48 83 ec 08 &nbsp;&nbsp;&nbsp; sub $0x8, %rsp</div>
+                                <div :class="getClass('prog-text-call')" class="px-1 border border-transparent rounded transition-all duration-300 flex justify-between">
+                                    <span>400004: e8 <span :class="step >= 5 ? 'text-amber-400 font-bold' : 'text-red-400'">{{ step >= 5 ? '07 00 00 00' : '00 00 00 00' }}</span></span>
+                                    <span class="text-slate-400">callq {{ step >= 5 ? '400010 <swap>' : '<swap>' }}</span>
+                                </div>
+                                <div class="text-slate-500">400009: b8 00 00 00 00 &nbsp; mov $0x0, %eax</div>
+                                <div class="text-slate-500">...</div>
+                            </div>
+                            <!-- 来自 swap.o -->
+                            <div :class="getClass('prog-text-swap')" class="p-2 space-y-1 border-l-4 border-green-500 border-t border-slate-700 bg-green-900/10 transition-all duration-300">
+                                <div class="text-xs text-slate-500 italic mb-1">// 拷贝自 swap.o</div>
+                                <div :class="getClass('prog-addr-swap')" class="px-1 border border-transparent rounded transition-all duration-300">
+                                    <span class="text-slate-300">400010:</span> <span class="text-slate-500">55 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; push %rbp</span>
+                                </div>
+                                <div class="text-slate-500">400011: 48 89 e5 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; mov %rsp, %rbp</div>
+                                <div class="text-slate-500">...</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Prog .data -->
+                        <div class="border border-slate-600 rounded bg-slate-900 mt-4 overflow-hidden">
+                            <div class="bg-slate-700 px-2 py-1 text-xs text-slate-300 border-b border-slate-600 font-bold flex justify-between">
+                                <span>.data (合并后的数据段)</span>
+                                <span class="text-amber-400 font-mono">Base: 0x600000</span>
+                            </div>
+                            <!-- 来自 main.o -->
+                            <div :class="getClass('prog-data-main')" class="p-2 space-y-1 border-l-4 border-blue-500 bg-blue-900/10 transition-all duration-300">
+                                <div class="text-xs text-slate-500 italic mb-1">// 拷贝自 main.o</div>
+                                <div :class="getClass('prog-addr-buf')" class="px-1 border border-transparent rounded transition-all duration-300 flex justify-between">
+                                    <span><span class="text-slate-300">600000:</span> <span class="text-green-400">01 00 00 00 02 00 00 00</span></span>
+                                    <span class="text-slate-400">buf</span>
+                                </div>
+                            </div>
+                            <!-- 来自 swap.o -->
+                            <div :class="getClass('prog-data-swap')" class="p-2 space-y-1 border-l-4 border-green-500 border-t border-slate-700 bg-green-900/10 transition-all duration-300">
+                                <div class="text-xs text-slate-500 italic mb-1">// 拷贝自 swap.o</div>
+                                <div :class="getClass('prog-data-bufp0')" class="px-1 border border-transparent rounded transition-all duration-300 flex justify-between">
+                                    <span><span class="text-slate-300">600008:</span> <span :class="step >= 6 ? 'text-amber-400 font-bold' : 'text-red-400'">{{ step >= 6 ? '00 00 60 00 00 00 00 00' : '00 00 00 00 00 00 00 00' }}</span></span>
+                                    <span class="text-slate-400">bufp0</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 动态数学公式展示区域 (重定位计算) -->
+                        <transition name="fade">
+                            <div v-if="step === 5" class="mt-4 p-3 bg-slate-900/80 border border-slate-600 rounded">
+                                <div class="text-amber-400 font-bold text-xs mb-2">PC相对寻址计算 (R_X86_64_PC32):</div>
+                                <div class="text-slate-300 text-xs leading-relaxed space-y-1">
+                                    <div class="mb-2"><span class="text-white font-bold bg-amber-900/50 px-1 rounded">CSAPP公式:</span> <code class="bg-slate-800 px-1 rounded">*refptr = ADDR(r.symbol) + r.addend - refaddr</code></div>
+                                    <div>1. 目标符号 `swap` 运行时地址 <code>ADDR(r.symbol)</code> = <span class="text-white">0x400010</span></div>
+                                    <div>2. 占位符运行时地址 <code>refaddr</code> = <span class="text-white">0x400005</span></div>
+                                    <div>3. 重定位条目的加数 <code>r.addend</code> = <span class="text-pink-400 font-bold">-4</span></div>
+                                    <div>4. 计算: 0x400010 + (-4) - 0x400005</div>
+                                    <div>&nbsp;&nbsp;&nbsp;= 0x40000C - 0x400005 = <span class="text-amber-400 font-bold text-sm">0x7</span></div>
+                                    <div class="mt-1 border-t border-slate-700 pt-1 text-slate-400 text-xs"><i>注：由于 x86 架构特性，这等效于直观的 "目标地址(0x400010) - 下一条指令PC(0x400009) = 0x7"</i></div>
+                                    <div class="mt-1">5. 填入 0x400005 处: <span class="text-amber-400 font-bold">07 00 00 00</span> (小端序)</div>
+                                </div>
+                            </div>
+                        </transition>
+
+                        <transition name="fade">
+                            <div v-if="step === 6" class="mt-4 p-3 bg-slate-900/80 border border-slate-600 rounded">
+                                <div class="text-amber-400 font-bold text-xs mb-2">绝对寻址重定位 (R_X86_64_64):</div>
+                                <div class="text-slate-300 text-xs leading-relaxed space-y-1">
+                                    <div class="mb-2"><span class="text-white font-bold bg-amber-900/50 px-1 rounded">CSAPP公式:</span> <code class="bg-slate-800 px-1 rounded">*refptr = ADDR(r.symbol) + r.addend</code></div>
+                                    <div>1. 引用的符号 `buf` 地址 <code>ADDR(r.symbol)</code> = <span class="text-white">0x600000</span></div>
+                                    <div>2. 重定位加数 <code>r.addend</code> = <span class="text-pink-400 font-bold">0</span></div>
+                                    <div>3. 计算: 0x600000 + 0 = <span class="text-amber-400 font-bold text-sm">0x600000</span></div>
+                                    <div class="mt-1">4. 填入 0x600008 的位置: <span class="text-amber-400 font-bold">00 00 60 00 00 00 00 00</span> (小端序)</div>
+                                </div>
+                            </div>
+                        </transition>
+
+                    </div>
+                </div>
+            </transition>
+            
+            <!-- 未生成时显示提示语 -->
+            <div v-show="step < 3" class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <span class="text-slate-600 border border-slate-600 px-4 py-2 rounded shadow bg-slate-900/50 backdrop-blur-sm">
+                    段合并与重定位后生成...
+                </span>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, computed, watch, onMounted } = Vue;
+
+    createApp({
+        setup() {
+            const step = ref(0);
+            const maxSteps = 7;
+            const isPlaying = ref(false);
+            const speed = ref(2000); // ms per step
+            let intervalId = null;
+
+            // 用于强制触发CSS动画的 trigger key
+            const animTrigger = ref(0);
+            const currentHighlights = ref([]);
+
+            // 各步骤的文字说明和需要高亮的元素 ID 集合
+            const stepsData = [
+                {
+                    title: "初始状态：两个独立的 `.o` 文件",
+                    desc: "编译器和汇编器生成了两个独立的可重定位目标文件。它们拥有自己**独立的从 0 开始的相对地址**。注意 `main.o` 中的 <code>call</code> 和 `swap.o` 中的 <code>bufp0</code> 此时都是占位符 (0x0)。",
+                    highlights: []
+                },
+                {
+                    title: "阶段一：符号解析 (Symbol Resolution) - 解析 swap",
+                    desc: "链接器扫描 `main.o` 发现了一个对外部函数 <code>swap</code> 的引用（UNDEF）。它在 `swap.o` 的符号表中成功找到了 <code>swap</code> 的全局定义，并将其绑定。",
+                    highlights: ['main-sym-swap', 'swap-sym-swap']
+                },
+                {
+                    title: "阶段一：符号解析 - 解析 buf",
+                    desc: "类似地，`swap.o` 引用了外部变量 <code>buf</code>。链接器在 `main.o` 中找到了 <code>buf</code> 的数据定义，完成符号绑定。至此，所有外部引用都已找到归宿。",
+                    highlights: ['swap-sym-buf', 'main-sym-buf']
+                },
+                {
+                    title: "阶段二：重定位 - 段合并与内存分配 (.text)",
+                    desc: "链接器将两个 `.o` 文件的 <code>.text</code> 代码段拼接到一起，分配到最终的绝对内存地址空间（如基址 0x400000）。注意右侧 <code>prog</code> 中此时包含了两者的汇编指令。",
+                    highlights: ['main-text-call', 'prog-text-main', 'prog-text-swap', 'prog-addr-swap']
+                },
+                {
+                    title: "阶段二：重定位 - 段合并与内存分配 (.data)",
+                    desc: "将所有的数据段 (<code>.data</code>) 拼接，分配内存（如基址 0x600000）。此时，所有的全局变量都拥有了自己在内存中的**绝对地址**。",
+                    highlights: ['main-data-buf', 'swap-data-bufp0', 'prog-data-main', 'prog-data-swap', 'prog-addr-buf']
+                },
+                {
+                    title: "阶段三：重定位 - 修改指令地址 (PC相对寻址)",
+                    desc: "链接器读取 `main.o` 的重定位条目，根据 CSAPP 标准公式 `ADDR(r.symbol) + r.addend - refaddr` 进行计算。最终算出偏移量为 <b>0x7</b>，并覆写回 <code>prog</code> 中。（重定位条目作用: 指示修改 `main.o` 的 .text 段中偏移 0x5 处的4字节占位符。）",
+                    highlights: ['main-reloc-swap', 'prog-text-call', 'prog-addr-swap']
+                },
+                {
+                    title: "阶段三：重定位 - 修改数据指针 (绝对寻址)",
+                    desc: "链接器读取 `swap.o` 的重定位条目。按照绝对寻址公式计算后，直接将 <code>buf</code> 的绝对地址 <b>0x600000</b> (小端序) 填入指针中。",
+                    highlights: ['swap-reloc-buf', 'prog-data-bufp0', 'prog-addr-buf']
+                },
+                {
+                    title: "完成！",
+                    desc: "静态链接过程结束！符号解析确保了“有处可去”，重定位确保了“走对了门”。生成的可执行文件 <code>prog</code> 现在可以直接被操作系统加载器读入内存并执行。",
+                    highlights: []
+                }
+            ];
+
+            const currentStepInfo = computed(() => stepsData[step.value]);
+
+            // 核心逻辑：当步骤改变时，触发高亮动画
+            watch(step, (newVal) => {
+                // 先清空，然后立刻通过 setTimeout 重新赋予，从而触发 CSS keyframes (由于绑定了相同的类名，Vue需要这种断点来重新挂载类)
+                currentHighlights.value = [];
+                setTimeout(() => {
+                    animTrigger.value++;
+                    currentHighlights.value = stepsData[newVal].highlights;
+                }, 30);
+            });
+
+            // 获取元素的动态 class
+            const getClass = (id) => {
+                if (currentHighlights.value.includes(id)) {
+                    // 使用动态 key (trigger) 并没有直接支持在 class 上刷新动画，
+                    // 但由于我们在 watch 中做了 30ms 的置空再赋值，类 `step-active` 会被移除再添加，从而重新触发动画。
+                    return 'step-active'; 
+                }
+                return ''; // 返回空代表无特殊高亮，保持自身默认 Tailwind 样式
+            };
+
+            const nextStep = () => {
+                if (step.value < maxSteps) {
+                    step.value++;
+                } else if (isPlaying.value) {
+                    pause(); // 到达结尾自动暂停
+                }
+            };
+
+            const prevStep = () => {
+                if (step.value > 0) step.value--;
+            };
+
+            const reset = () => {
+                step.value = 0;
+                pause();
+            };
+
+            const play = () => {
+                isPlaying.value = true;
+                if (step.value === maxSteps) step.value = 0;
+                
+                intervalId = setInterval(() => {
+                    if (step.value < maxSteps) {
+                        step.value++;
+                    } else {
+                        pause();
+                    }
+                }, speed.value);
+            };
+
+            const pause = () => {
+                isPlaying.value = false;
+                if (intervalId) {
+                    clearInterval(intervalId);
+                    intervalId = null;
+                }
+            };
+
+            const togglePlay = () => {
+                if (isPlaying.value) {
+                    pause();
+                } else {
+                    play();
+                }
+            };
+
+            // 当调节速度时，如果正在播放，则重启定时器
+            watch(speed, () => {
+                if (isPlaying.value) {
+                    pause();
+                    play();
+                }
+            });
+
+            // 初始触发一次首屏高亮检查（虽然 step 0 没有）
+            onMounted(() => {
+                currentHighlights.value = stepsData[step.value].highlights;
+            });
+
+            return {
+                step, maxSteps, isPlaying, speed,
+                currentStepInfo, getClass,
+                nextStep, prevStep, reset, togglePlay
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>

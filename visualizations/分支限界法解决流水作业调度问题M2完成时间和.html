@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>批处理作业调度 - 优先队列分支限界法 (高级演示)</title>
+    <!-- 使用 Vue 3 进行数据状态管理 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <!-- 使用 D3.js 仅用于计算完美的树状拓扑布局 -->
+    <script src="https://unpkg.com/d3@7"></script>
+    <!-- Tailwind CSS 保证严格固定的布局体系 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; overflow: hidden; }
+        
+        /* 强制隐藏外部滚动条，所有滚动都在固定的容器内发生 */
+        .fixed-container { overflow: hidden; }
+        .scroll-y { overflow-y: auto; overflow-x: hidden; }
+        
+        /* 优雅的自定义滚动条 */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* 甘特图平滑动画 */
+        .gantt-item { transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+        
+        /* 高亮强调数据时的渐变背景 */
+        .highlight-data { background-color: #eff6ff; border-color: #bfdbfe; transition: all 0.2s; }
+        
+        /* 表格固定表头 */
+        .sticky-header th { position: sticky; top: 0; background-color: #f1f5f9; z-index: 10; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+
+        canvas { cursor: grab; display: block; width: 100%; height: 100%; }
+        canvas:active { cursor: grabbing; }
+    </style>
+</head>
+<body>
+    <div id="app" class="h-screen w-screen flex flex-col p-3 box-border gap-3">
+        
+        <!-- 顶栏：标题、问题数据矩阵、播放控制区 (高度固定) -->
+        <header class="flex shrink-0 justify-between items-stretch bg-white rounded-lg shadow-sm border border-slate-200 p-3 h-[88px]">
+            <!-- 左：标题区 -->
+            <div class="flex flex-col justify-center w-1/4 pr-4 border-r border-slate-100">
+                <h1 class="text-xl font-extrabold text-slate-800 tracking-tight">批处理作业调度</h1>
+                <div class="text-xs text-slate-500 font-medium mt-1">优先队列分支限界法 (Best-First Search)</div>
+            </div>
+            
+            <!-- 中：作业耗时矩阵 -->
+            <div class="flex flex-col justify-center px-6 w-1/4 border-r border-slate-100">
+                <table class="w-full text-center text-xs border-collapse">
+                    <thead>
+                        <tr>
+                            <th class="border border-slate-200 text-slate-500 font-normal bg-slate-50 py-1">作业 J<sub>i</sub></th>
+                            <th v-for="j in jobs" :key="j.id" class="border border-slate-200 font-bold text-slate-700 py-1 bg-slate-100 w-8">J{{ j.id + 1 }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="border border-slate-200 text-slate-500 py-1">机器 1 (t<sub>1</sub>)</td>
+                            <td v-for="j in jobs" :key="'t1'+j.id" class="border border-slate-200 font-mono text-blue-600">{{ j.t1 }}</td>
+                        </tr>
+                        <tr>
+                            <td class="border border-slate-200 text-slate-500 py-1">机器 2 (t<sub>2</sub>)</td>
+                            <td v-for="j in jobs" :key="'t2'+j.id" class="border border-slate-200 font-mono text-emerald-600">{{ j.t2 }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 右：播放控制器 -->
+            <div class="flex items-center justify-between px-4 flex-1 gap-4">
+                <div class="flex items-center gap-2 bg-slate-50 p-2 rounded-lg border border-slate-200">
+                    <button @click="reset" class="w-8 h-8 flex items-center justify-center rounded hover:bg-slate-200 text-slate-600 transition" title="重置">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    </button>
+                    <button @click="prevStep" :disabled="currentStepIndex === 0" class="w-8 h-8 flex items-center justify-center rounded hover:bg-slate-200 text-slate-600 disabled:opacity-30 transition">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7"></path></svg>
+                    </button>
+                    
+                    <button v-if="!isPlaying" @click="play" class="w-10 h-10 flex items-center justify-center rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-md transition">
+                        <svg class="w-5 h-5 ml-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"></path></svg>
+                    </button>
+                    <button v-else @click="pause" class="w-10 h-10 flex items-center justify-center rounded-full bg-rose-500 hover:bg-rose-600 text-white shadow-md transition">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg>
+                    </button>
+
+                    <button @click="nextStep" :disabled="currentStepIndex === steps.length - 1" class="w-8 h-8 flex items-center justify-center rounded hover:bg-slate-200 text-slate-600 disabled:opacity-30 transition">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"></path></svg>
+                    </button>
+                </div>
+
+                <div class="flex flex-col flex-1 max-w-[200px]">
+                    <div class="flex justify-between text-xs text-slate-500 mb-1 font-medium">
+                        <span>播放速度</span>
+                        <span class="font-mono">{{ (1000 / currentPlayInterval).toFixed(1) }}x</span>
+                    </div>
+                    <input type="range" min="1" max="10" v-model="speedSlider" @input="updateSpeed" class="w-full accent-blue-600 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer">
+                </div>
+            </div>
+        </header>
+
+        <!-- 主内容区：左右分割 严格比例 50:50 (剩余高度) -->
+        <main class="flex flex-1 gap-3 overflow-hidden">
+            
+            <!-- 左侧半区：高质量 Canvas 排列空间树 -->
+            <div class="w-1/2 bg-white rounded-lg shadow-sm border border-slate-200 flex flex-col relative fixed-container">
+                <!-- 树状态图例栏 固定顶部 -->
+                <div class="h-[40px] shrink-0 bg-slate-50 border-b border-slate-200 px-4 flex justify-between items-center z-10">
+                    <div class="text-sm font-bold text-slate-700">排列空间树追踪器</div>
+                    <div class="flex gap-4 text-xs font-medium text-slate-600">
+                        <div class="flex items-center gap-1.5"><div class="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-sm"></div>优先队列中</div>
+                        <div class="flex items-center gap-1.5"><div class="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-sm border border-blue-600"></div>当前展开</div>
+                        <div class="flex items-center gap-1.5"><div class="w-2.5 h-2.5 rounded-full bg-slate-300 shadow-sm"></div>已被剪枝</div>
+                        <div class="flex items-center gap-1.5"><div class="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-sm border border-emerald-600"></div>最优叶子解</div>
+                    </div>
+                </div>
+                <!-- 纯 Canvas 画布，利用 JS 精确控制分辨率和摄像机 -->
+                <div class="flex-1 w-full h-full relative overflow-hidden" ref="canvasWrapper">
+                    <canvas ref="treeCanvas" @mousedown="onCanvasDragStart" @mousemove="onCanvasDragMove" @mouseup="onCanvasDragEnd" @mouseleave="onCanvasDragEnd" @wheel="onCanvasWheel"></canvas>
+                </div>
+                <!-- 悬浮层：全局最优解追踪 -->
+                <div class="absolute bottom-4 right-4 bg-white/90 backdrop-blur border border-slate-200 shadow-lg rounded-lg p-3 w-[220px]">
+                    <div class="text-xs text-slate-500 font-semibold mb-1 uppercase tracking-wider">全局已知最优解 (bestF)</div>
+                    <div class="text-3xl font-mono font-bold" :class="currentStep?.bestF === Infinity ? 'text-slate-400' : 'text-emerald-600'">
+                        {{ currentStep?.bestF === Infinity ? '∞' : currentStep?.bestF }}
+                    </div>
+                    <div class="text-[10px] text-slate-400 mt-1 leading-tight">当任何新节点的限界值 bb &ge; bestF 时，该分支被立即剪枝。</div>
+                </div>
+            </div>
+
+            <!-- 右侧半区：详细数据面板。切分为上中下三个固定模块 -->
+            <div class="w-1/2 flex flex-col gap-3 overflow-hidden">
+                
+                <!-- 模块 1：步骤说明区 (固定高度) -->
+                <div class="h-[80px] shrink-0 bg-blue-50 border border-blue-200 rounded-lg p-4 flex flex-col justify-center">
+                    <div class="text-xs font-bold text-blue-600 mb-1 uppercase tracking-wider">算法执行动态 - 步骤 {{ currentStepIndex + 1 }}/{{ steps.length }}</div>
+                    <div class="text-sm text-blue-900 font-medium leading-relaxed" v-html="currentStep?.description"></div>
+                </div>
+
+                <!-- 模块 2：当前节点状态与甘特图 (固定高度) -->
+                <div class="h-[220px] shrink-0 bg-white border border-slate-200 rounded-lg p-4 flex flex-col">
+                    <div class="flex justify-between items-end border-b border-slate-100 pb-2 mb-3">
+                        <div class="text-sm font-bold text-slate-800">当前计算节点</div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-slate-500">已调度序列:</span>
+                            <span class="px-2 py-0.5 bg-slate-800 text-white rounded text-xs font-mono font-bold">{{ formatPathArray(currentStep?.currentNode?.path) }}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- 核心指标 Grid -->
+                    <div class="grid grid-cols-4 gap-3 mb-4">
+                        <div class="bg-slate-50 rounded border border-slate-100 p-2 text-center flex flex-col justify-center">
+                            <div class="text-[10px] text-slate-500 font-medium">M1 最后完成时间</div>
+                            <div class="text-lg font-mono font-bold text-slate-800 mt-0.5">{{ currentStep?.currentNode?.f1 || 0 }}</div>
+                        </div>
+                        <div class="bg-slate-50 rounded border border-slate-100 p-2 text-center flex flex-col justify-center">
+                            <div class="text-[10px] text-slate-500 font-medium">M2 最后完成时间</div>
+                            <div class="text-lg font-mono font-bold text-slate-800 mt-0.5">{{ currentStep?.currentNode?.f2 || 0 }}</div>
+                        </div>
+                        <div class="bg-slate-50 rounded border border-slate-100 p-2 text-center flex flex-col justify-center">
+                            <div class="text-[10px] text-slate-500 font-medium">已知作业和 (sf<sub>2</sub>)</div>
+                            <div class="text-lg font-mono font-bold text-slate-800 mt-0.5">{{ currentStep?.currentNode?.sf2 || 0 }}</div>
+                        </div>
+                        <div class="bg-indigo-50 rounded border border-indigo-200 p-2 text-center flex flex-col justify-center shadow-inner">
+                            <div class="text-[10px] text-indigo-600 font-bold">最终下界 (bb)</div>
+                            <div class="text-xl font-mono font-extrabold text-indigo-700 mt-0.5">{{ currentStep?.currentNode?.bb || 0 }}</div>
+                        </div>
+                    </div>
+
+                    <!-- 甘特图表现 (完全 CSS 控制的静态/动画边界) -->
+                    <div class="flex-1 bg-slate-50 rounded-lg border border-slate-200 relative pt-6 px-3 pb-2 flex flex-col justify-center">
+                        <div class="absolute top-1 left-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider">实时执行甘特图</div>
+                        
+                        <!-- 机器1 轴 -->
+                        <div class="flex items-center mb-2">
+                            <div class="w-8 text-[10px] font-bold text-slate-600 text-right pr-2">M 1</div>
+                            <div class="flex-1 h-5 bg-slate-200 rounded overflow-hidden relative">
+                                <div v-for="block in getGanttData(currentStep?.currentNode).m1" :key="'g1'+block.id"
+                                     class="absolute h-full flex items-center justify-center text-[10px] font-bold text-white border-r border-white/30 gantt-item"
+                                     :style="{ left: `${block.start / maxGanttTime * 100}%`, width: `${block.duration / maxGanttTime * 100}%`, backgroundColor: getJobColor(block.id) }">
+                                    J{{ block.id + 1 }}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 机器2 轴 -->
+                        <div class="flex items-center">
+                            <div class="w-8 text-[10px] font-bold text-slate-600 text-right pr-2">M 2</div>
+                            <div class="flex-1 h-5 bg-slate-200 rounded overflow-hidden relative">
+                                <div v-for="block in getGanttData(currentStep?.currentNode).m2" :key="'g2'+block.id"
+                                     class="absolute h-full flex items-center justify-center text-[10px] font-bold text-white border-r border-white/30 gantt-item"
+                                     :style="{ left: `${block.start / maxGanttTime * 100}%`, width: `${block.duration / maxGanttTime * 100}%`, backgroundColor: getJobColor(block.id) }">
+                                    J{{ block.id + 1 }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 模块 3：限界函数推导表格与优先队列 (剩余空间，内部滚动) -->
+                <div class="flex-1 bg-white border border-slate-200 rounded-lg flex flex-col overflow-hidden">
+                    <div class="h-[40px] shrink-0 bg-slate-50 border-b border-slate-200 px-4 flex items-center justify-between z-10">
+                        <div class="text-sm font-bold text-slate-700">限界函数严格计算表</div>
+                        <div class="text-xs text-slate-500 font-mono">bb = max(S<sub>1</sub>, S<sub>2</sub>)</div>
+                    </div>
+                    
+                    <div class="flex-1 p-0 overflow-y-auto scroll-y bg-slate-50/50">
+                        <!-- 非叶子节点的计算过程 -->
+                        <div v-if="currentStep?.currentNode && currentStep.currentNode.path.length < jobs.length" class="p-4 flex flex-col gap-5">
+                            
+                            <!-- S1 计算表 -->
+                            <div class="bg-white border border-slate-200 rounded shadow-sm overflow-hidden">
+                                <div class="bg-blue-50 px-3 py-1.5 border-b border-slate-200 flex justify-between items-center">
+                                    <div class="text-xs font-bold text-blue-800">计算 S<sub>1</sub>：基于 M1 极限无休状态</div>
+                                    <div class="text-xs font-mono text-blue-700 bg-blue-100 px-2 py-0.5 rounded">S<sub>1</sub> 结果 = {{ currentStep.currentNode.s1 }}</div>
+                                </div>
+                                <div class="p-3 text-[11px] text-slate-600 leading-relaxed border-b border-slate-100 bg-slate-50">
+                                    <b>逻辑：</b>将剩余 {{ currentStep.currentNode.remaining.length }} 个未排作业按 <b>t<sub>1</sub> 升序</b>排列，尽可能减少后续作业的等待。公式计算每个作业产生的增量。
+                                </div>
+                                <table class="w-full text-center text-[11px] border-collapse">
+                                    <thead class="sticky-header">
+                                        <tr class="text-slate-500 bg-slate-100">
+                                            <th class="py-1.5 border-b border-slate-200">剩余作业</th>
+                                            <th class="py-1.5 border-b border-slate-200">系数(m-k+1)</th>
+                                            <th class="py-1.5 border-b border-slate-200">t<sub>1</sub></th>
+                                            <th class="py-1.5 border-b border-slate-200">t<sub>2</sub></th>
+                                            <th class="py-1.5 border-b border-slate-200 bg-blue-50">时间增量</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="font-mono">
+                                        <tr v-for="(row, i) in currentStep.currentNode.calcDetails.s1Table" :key="'s1r'+i" class="border-b border-slate-100 hover:bg-slate-50">
+                                            <td class="py-1.5 font-bold text-slate-700">J{{ row.jobId + 1 }}</td>
+                                            <td class="py-1.5">{{ row.multiplier }}</td>
+                                            <td class="py-1.5">{{ row.t1 }}</td>
+                                            <td class="py-1.5">{{ row.t2 }}</td>
+                                            <td class="py-1.5 text-blue-700 bg-blue-50/30">
+                                                f1({{ currentStep.currentNode.f1 }}) + {{ row.multiplier }}&times;{{ row.t1 }} + {{ row.t2 }} = <b>{{ row.increment }}</b>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                <div class="p-2 text-right text-[11px] font-mono text-slate-600 bg-slate-50">
+                                    S<sub>1</sub> = sf<sub>2</sub>({{ currentStep.currentNode.sf2 }}) + 增量和({{ currentStep.currentNode.calcDetails.s1Table.reduce((sum, r)=>sum+r.increment, 0) }}) = <b class="text-blue-700 text-xs">{{ currentStep.currentNode.s1 }}</b>
+                                </div>
+                            </div>
+
+                            <!-- S2 计算表 -->
+                            <div class="bg-white border border-slate-200 rounded shadow-sm overflow-hidden">
+                                <div class="bg-emerald-50 px-3 py-1.5 border-b border-slate-200 flex justify-between items-center">
+                                    <div class="text-xs font-bold text-emerald-800">计算 S<sub>2</sub>：基于 M2 极限无休状态</div>
+                                    <div class="text-xs font-mono text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">S<sub>2</sub> 结果 = {{ currentStep.currentNode.s2 }}</div>
+                                </div>
+                                <div class="p-3 text-[11px] text-slate-600 leading-relaxed border-b border-slate-100 bg-slate-50">
+                                    <b>逻辑：</b>M2 最早开工时间 T<sub>start</sub> = max(f2, f1 + min(t<sub>1</sub>)) = <b>{{ currentStep.currentNode.calcDetails.m2StartTime }}</b>。将剩余作业按 <b>t<sub>2</sub> 升序</b>排列，计算增量。
+                                </div>
+                                <table class="w-full text-center text-[11px] border-collapse">
+                                    <thead class="sticky-header">
+                                        <tr class="text-slate-500 bg-slate-100">
+                                            <th class="py-1.5 border-b border-slate-200">剩余作业</th>
+                                            <th class="py-1.5 border-b border-slate-200">系数(m-k+1)</th>
+                                            <th class="py-1.5 border-b border-slate-200">t<sub>2</sub></th>
+                                            <th class="py-1.5 border-b border-slate-200 bg-emerald-50">时间增量</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="font-mono">
+                                        <tr v-for="(row, i) in currentStep.currentNode.calcDetails.s2Table" :key="'s2r'+i" class="border-b border-slate-100 hover:bg-slate-50">
+                                            <td class="py-1.5 font-bold text-slate-700">J{{ row.jobId + 1 }}</td>
+                                            <td class="py-1.5">{{ row.multiplier }}</td>
+                                            <td class="py-1.5">{{ row.t2 }}</td>
+                                            <td class="py-1.5 text-emerald-700 bg-emerald-50/30">
+                                                T<sub>start</sub>({{ currentStep.currentNode.calcDetails.m2StartTime }}) + {{ row.multiplier }}&times;{{ row.t2 }} = <b>{{ row.increment }}</b>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                <div class="p-2 text-right text-[11px] font-mono text-slate-600 bg-slate-50">
+                                    S<sub>2</sub> = sf<sub>2</sub>({{ currentStep.currentNode.sf2 }}) + 增量和({{ currentStep.currentNode.calcDetails.s2Table.reduce((sum, r)=>sum+r.increment, 0) }}) = <b class="text-emerald-700 text-xs">{{ currentStep.currentNode.s2 }}</b>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 叶子节点展示 -->
+                        <div v-else-if="currentStep?.currentNode?.path.length === jobs.length" class="p-6 h-full flex flex-col items-center justify-center">
+                            <div class="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-3">
+                                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                            </div>
+                            <h3 class="text-lg font-bold text-slate-800 mb-1">触达树的叶子节点</h3>
+                            <p class="text-sm text-slate-500 text-center max-w-[80%]">这是一个完整的全排列方案，其完成时间和(sf<sub>2</sub>) 为真实的 <b>{{ currentStep.currentNode.sf2 }}</b>。此时不需要进行限界预估，bb 值直接等于此真实值。</p>
+                        </div>
+                    </div>
+
+                    <!-- 优先队列状态栏 (固定底部) -->
+                    <div class="h-[50px] shrink-0 bg-slate-800 flex items-center px-4 overflow-hidden gap-3 relative">
+                        <div class="text-xs font-bold text-slate-300 uppercase tracking-wide shrink-0">优先队列 (活节点)</div>
+                        <div class="flex-1 flex gap-2 overflow-x-auto scroll-y items-center h-full hide-scrollbar pb-1 pt-1">
+                            <div v-if="!currentStep?.pq || currentStep.pq.length === 0" class="text-xs text-slate-500 italic">队列已清空</div>
+                            <!-- 队列元素：按 bb 升序排列 -->
+                            <div v-for="(qNode, idx) in currentStep?.pq" :key="'pq'+idx" 
+                                 class="shrink-0 flex items-center border border-slate-600 rounded overflow-hidden bg-slate-700 shadow-sm"
+                                 :class="idx === 0 ? 'ring-1 ring-amber-400' : ''" title="优先队列按bb值从小到大排序，处于队首的将首先被弹出展开">
+                                <div class="bg-slate-900 text-amber-400 font-mono text-[10px] font-bold px-2 py-1">bb:{{ qNode.bb }}</div>
+                                <div class="text-slate-200 font-mono text-[10px] px-2 py-1 tracking-wider">{{ formatPathArray(qNode.path) || '[]' }}</div>
+                            </div>
+                        </div>
+                        <!-- 右侧阴影遮罩 -->
+                        <div class="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-800 to-transparent pointer-events-none"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
+
+        // 统一颜色映射
+        const JOB_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
+
+        // ====== 核心数学与数据逻辑封装 ======
+        class FlowShopSolver {
+            constructor(jobs) {
+                this.jobs = jobs;
+                this.n = jobs.length;
+                this.steps = [];
+                this.nodeIdCounter = 1;
+            }
+
+            // 计算限界函数 (严格遵循课本算法：利用化简后的时间增量公式)
+            computeBounds(path, remaining) {
+                let f1 = 0, f2 = 0, sf2 = 0;
+                
+                // 1. 根据已安排路径计算 f1, f2, sf2
+                for (let jId of path) {
+                    let job = this.jobs[jId];
+                    f1 += job.t1;
+                    f2 = Math.max(f1, f2) + job.t2;
+                    sf2 += f2;
+                }
+
+                // 叶子节点直接返回真实结果
+                if (remaining.length === 0) {
+                    return { f1, f2, sf2, s1: sf2, s2: sf2, bb: sf2, calcDetails: null };
+                }
+
+                let calcDetails = { s1Table: [], s2Table: [], m2StartTime: 0 };
+                let m = remaining.length;
+
+                // 2. 计算 S1 (将剩余作业按 t1 升序)
+                let rem1 = [...remaining].sort((a, b) => this.jobs[a].t1 - this.jobs[b].t1);
+                let s1 = sf2;
+                for (let k = 0; k < m; k++) {
+                    let job = this.jobs[rem1[k]];
+                    let multiplier = m - k; // 书中的 n-k+1 化简，这里 k 从 0 开始，等价于剩余未加系数的数量
+                    let increment = f1 + multiplier * job.t1 + job.t2;
+                    s1 += increment;
+                    calcDetails.s1Table.push({ jobId: rem1[k], multiplier, t1: job.t1, t2: job.t2, increment });
+                }
+
+                // 3. 计算 S2 (将剩余作业按 t2 升序)
+                let rem2 = [...remaining].sort((a, b) => this.jobs[a].t2 - this.jobs[b].t2);
+                let min_t1 = Math.min(...remaining.map(id => this.jobs[id].t1));
+                let m2StartTime = Math.max(f2, f1 + min_t1);
+                calcDetails.m2StartTime = m2StartTime;
+                let s2 = sf2;
+                for (let k = 0; k < m; k++) {
+                    let job = this.jobs[rem2[k]];
+                    let multiplier = m - k;
+                    let increment = m2StartTime + multiplier * job.t2;
+                    s2 += increment;
+                    calcDetails.s2Table.push({ jobId: rem2[k], multiplier, t2: job.t2, increment });
+                }
+
+                let bb = Math.max(s1, s2);
+                return { f1, f2, sf2, s1, s2, bb, calcDetails };
+            }
+
+            // 预生成所有推演步骤
+            generateAllSteps() {
+                // 初始化一个不太好的解作为 upper bound 演示剪枝 (比如按输入顺序直排)
+                let initialDummyBounds = this.computeBounds([0,1,2,3], []);
+                let bestF = initialDummyBounds.sf2; // 对于本例数据是 31
+
+                let initialRemaining = this.jobs.map(j => j.id);
+                let rootBounds = this.computeBounds([], initialRemaining);
+                let rootNode = {
+                    id: this.nodeIdCounter++,
+                    parentId: null,
+                    path: [],
+                    remaining: initialRemaining,
+                    ...rootBounds,
+                    status: 'queue',
+                    depth: 0
+                };
+
+                let pq = [rootNode];
+                let allTreeNodes = [rootNode]; // 保存所有生成的节点用于绘图
+
+                const recordStep = (description, activeNode = null) => {
+                    this.steps.push({
+                        description,
+                        // 必须深拷贝当前状态，保证步进历史的绝对纯洁性
+                        treeNodes: JSON.parse(JSON.stringify(allTreeNodes)),
+                        pq: JSON.parse(JSON.stringify(pq)),
+                        currentNode: activeNode ? JSON.parse(JSON.stringify(activeNode)) : null,
+                        bestF: bestF
+                    });
+                };
+
+                recordStep(`<b>算法启动</b>。预设已知最优解 bestF = ${bestF}。生成空根节点并存入优先队列。`, rootNode);
+
+                while (pq.length > 0) {
+                    // 出队：优先级依据 bb 值最小。如果相同则深度优先(尽快到达叶子以更新 bestF)
+                    pq.sort((a, b) => a.bb !== b.bb ? a.bb - b.bb : b.depth - a.depth);
+                    let curr = pq.shift();
+
+                    let nodeRef = allTreeNodes.find(n => n.id === curr.id);
+                    if (curr.bb >= bestF) {
+                        nodeRef.status = 'pruned';
+                        recordStep(`从优先队列取出具有最小 bb 值的节点 <b>[${curr.path.map(i=>i+1).join(',')}]</b> (bb=${curr.bb})。由于当前出队节点的 bb 值已经 &ge; 全局最优解 bestF (${bestF})，且队列已按升序排列，后续所有节点的下界都不可能优于当前最优，<span class="text-rose-600 font-bold">算法提前终止搜索</span>。`, curr);
+                        pq.length = 0; // 清空优先队列以跳出 while 循环
+                        continue;
+                    }
+                    nodeRef.status = 'active';
+
+                    recordStep(`从优先队列取出具有最小 bb 值的节点 <b>[${curr.path.map(i=>i+1).join(',')}]</b> (bb=${curr.bb}) 进行展开。`, curr);
+
+                    if (curr.path.length === this.n) {
+                        nodeRef.status = 'best';
+                        if (curr.bb < bestF) {
+                            bestF = curr.bb;
+                            recordStep(`该节点为完整排列。发现更优的真实完成时间 <b>${curr.bb}</b>。更新全局 bestF，记录此序列。`, curr);
+                        } else {
+                            recordStep(`该节点为完整排列。但耗时 ${curr.bb} 并不优于 bestF(${bestF})，放弃。`, curr);
+                        }
+                        continue;
+                    }
+
+                    // 展开子节点
+                    let newChildren = [];
+                    for (let jId of curr.remaining) {
+                        let newPath = [...curr.path, jId];
+                        let newRemaining = curr.remaining.filter(id => id !== jId);
+                        let bounds = this.computeBounds(newPath, newRemaining);
+                        
+                        let childNode = {
+                            id: this.nodeIdCounter++,
+                            parentId: curr.id,
+                            path: newPath,
+                            remaining: newRemaining,
+                            ...bounds,
+                            depth: curr.depth + 1,
+                            status: 'created'
+                        };
+                        allTreeNodes.push(childNode);
+                        newChildren.push(childNode);
+                    }
+
+                    recordStep(`为节点 <b>[${curr.path.map(i=>i+1).join(',')}]</b> 生成 ${newChildren.length} 个子节点，并依据限界函数计算它们各自的 bb 值。`, curr);
+
+                    // 剪枝评估
+                    for (let child of newChildren) {
+                        let cRef = allTreeNodes.find(n => n.id === child.id);
+                        if (child.bb >= bestF) {
+                            cRef.status = 'pruned';
+                            recordStep(`子节点 <b>[${child.path.map(i=>i+1).join(',')}]</b> 的 bb 值(${child.bb}) &ge; bestF(${bestF})，没有前途，<span class="text-rose-600 font-bold">执行剪枝</span>。`, child);
+                        } else {
+                            cRef.status = 'queue';
+                            pq.push(child);
+                        }
+                    }
+                    
+                    // 标记当前处理完毕
+                    nodeRef.status = 'visited';
+                }
+
+                recordStep("<b>搜索结束</b>。优先队列已空，全局最优解搜索完毕。", null);
+                return this.steps;
+            }
+        }
+
+        // ====== 独立的高性能 Canvas 渲染引擎 ======
+        class HighPerformanceTreeRenderer {
+            constructor(canvasElement) {
+                this.canvas = canvasElement;
+                this.ctx = this.canvas.getContext('2d', { alpha: false }); // 优化性能
+                this.dpr = window.devicePixelRatio || 1;
+                
+                // 摄像机状态
+                this.camera = { x: 0, y: -40, scale: 1, targetX: 0, targetY: 0, targetScale: 1 };
+                // 拖拽状态
+                this.isDragging = false;
+                this.dragStart = { x: 0, y: 0 };
+                
+                // 数据存储
+                this.nodes = [];
+                this.edges = [];
+                
+                // 动画循环控制
+                this.animationFrameId = null;
+                
+                // 样式常量
+                this.styles = {
+                    bg: '#ffffff',
+                    colors: {
+                        'queue': { fill: '#fbbf24', stroke: '#d97706', text: '#fff' }, // amber
+                        'active': { fill: '#3b82f6', stroke: '#1d4ed8', text: '#fff' }, // blue
+                        'visited': { fill: '#f1f5f9', stroke: '#cbd5e1', text: '#64748b' }, // slate light
+                        'pruned': { fill: '#e2e8f0', stroke: '#94a3b8', text: '#94a3b8' }, // slate dark
+                        'best': { fill: '#10b981', stroke: '#047857', text: '#fff' }, // emerald
+                        'created': { fill: '#fffbeb', stroke: '#fde68a', text: '#92400e' }
+                    },
+                    nodeRadius: 22,
+                    edgeColor: '#e2e8f0',
+                    activeEdgeColor: '#93c5fd'
+                };
+                
+                this.resize();
+                window.addEventListener('resize', () => this.resize());
+                this.startLoop();
+            }
+
+            resize() {
+                const rect = this.canvas.parentElement.getBoundingClientRect();
+                this.canvas.width = rect.width * this.dpr;
+                this.canvas.height = rect.height * this.dpr;
+                this.canvas.style.width = `${rect.width}px`;
+                this.canvas.style.height = `${rect.height}px`;
+                this.width = rect.width;
+                this.height = rect.height;
+            }
+
+            // 更新绘制数据 (借助 D3 计算拓扑坐标，完美呈现树结构)
+            updateData(treeNodesData, activeNodeId) {
+                if (!treeNodesData || treeNodesData.length === 0) return;
+
+                // 1. 构建 D3 Hierarchy
+                // 这里需要将扁平的 array 还原为具有 children 的层级对象
+                let rootData = null;
+                const nodeMap = {};
+                
+                treeNodesData.forEach(n => {
+                    nodeMap[n.id] = { ...n, children: [] };
+                });
+                
+                treeNodesData.forEach(n => {
+                    if (n.parentId === null) {
+                        rootData = nodeMap[n.id];
+                    } else if (nodeMap[n.parentId]) {
+                        nodeMap[n.parentId].children.push(nodeMap[n.id]);
+                    }
+                });
+
+                if (!rootData) return;
+
+                // 2. 利用 D3.tree 计算 x, y
+                const root = d3.hierarchy(rootData);
+                // 节点横向间距 60，纵向间距 100
+                const treeLayout = d3.tree().nodeSize([65, 100]); 
+                treeLayout(root);
+
+                // 3. 提取给 Canvas
+                this.nodes = root.descendants().map(d => ({
+                    x: d.x, 
+                    y: d.y,
+                    data: d.data
+                }));
+                
+                this.edges = root.links().map(l => ({
+                    source: { x: l.source.x, y: l.source.y, status: l.target.data.status },
+                    target: { x: l.target.x, y: l.target.y, status: l.target.data.status }
+                }));
+
+                // 4. 驱动摄像机追寻活跃节点
+                let targetNode = this.nodes.find(n => n.data.id === activeNodeId) || this.nodes[0];
+                if (targetNode && !this.isDragging) {
+                    // 将目标节点居中：逻辑坐标到屏幕中心
+                    this.camera.targetX = -targetNode.x + this.width / 2;
+                    this.camera.targetY = -targetNode.y + this.height * 0.4; // 偏上一点
+                }
+            }
+
+            startLoop() {
+                const render = () => {
+                    this.draw();
+                    this.animationFrameId = requestAnimationFrame(render);
+                };
+                render();
+            }
+
+            destroy() {
+                cancelAnimationFrame(this.animationFrameId);
+            }
+
+            draw() {
+                // 摄像机缓动 (Spring physics-like interpolation)
+                this.camera.x += (this.camera.targetX - this.camera.x) * 0.1;
+                this.camera.y += (this.camera.targetY - this.camera.y) * 0.1;
+                this.camera.scale += (this.camera.targetScale - this.camera.scale) * 0.1;
+
+                const ctx = this.ctx;
+                ctx.save();
+                
+                // 清理并设置背景
+                ctx.fillStyle = this.styles.bg;
+                ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                // 应用 DPI 和 摄像机矩阵
+                ctx.scale(this.dpr, this.dpr);
+                ctx.translate(this.camera.x, this.camera.y);
+                ctx.scale(this.camera.scale, this.camera.scale);
+
+                // --- 绘制连线 ---
+                ctx.lineWidth = 2;
+                for (let edge of this.edges) {
+                    ctx.beginPath();
+                    ctx.moveTo(edge.source.x, edge.source.y);
+                    // 添加一点贝塞尔曲线使连线更柔和
+                    ctx.bezierCurveTo(
+                        edge.source.x, edge.source.y + 40,
+                        edge.target.x, edge.target.y - 40,
+                        edge.target.x, edge.target.y
+                    );
+                    
+                    if (edge.target.status === 'active' || edge.target.status === 'best') {
+                        ctx.strokeStyle = this.styles.activeEdgeColor;
+                        ctx.lineWidth = 3;
+                    } else if (edge.target.status === 'pruned') {
+                        ctx.strokeStyle = '#f1f5f9';
+                        ctx.lineWidth = 1.5;
+                    } else {
+                        ctx.strokeStyle = this.styles.edgeColor;
+                        ctx.lineWidth = 2;
+                    }
+                    ctx.stroke();
+                }
+
+                // --- 绘制节点 ---
+                for (let node of this.nodes) {
+                    let d = node.data;
+                    let style = this.styles.colors[d.status] || this.styles.colors['visited'];
+                    let isCurrentPath = d.status === 'active' || d.status === 'best';
+
+                    // 激活状态发光特效
+                    if (isCurrentPath) {
+                        ctx.shadowColor = style.fill;
+                        ctx.shadowBlur = 15;
+                        ctx.shadowOffsetY = 0;
+                    } else {
+                        ctx.shadowColor = 'rgba(0,0,0,0.05)';
+                        ctx.shadowBlur = 4;
+                        ctx.shadowOffsetY = 2;
+                    }
+
+                    // 圆形背景
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, this.styles.nodeRadius, 0, Math.PI * 2);
+                    ctx.fillStyle = style.fill;
+                    ctx.fill();
+
+                    // 边框
+                    ctx.shadowColor = 'transparent'; // 关闭发光，画清晰的边框
+                    ctx.lineWidth = isCurrentPath ? 3 : 1;
+                    ctx.strokeStyle = style.stroke;
+                    ctx.stroke();
+
+                    // 节点内文字 (当前作业编号)
+                    let text = d.path.length > 0 ? `J${d.path[d.path.length-1] + 1}` : 'R';
+                    ctx.fillStyle = style.text;
+                    ctx.font = "bold 14px -apple-system, sans-serif";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(text, node.x, node.y + 1); // +1 visual optical adjustment
+
+                    // 节点下方的 bb 值文字
+                    if (d.bb !== 0) {
+                        ctx.font = "10px monospace";
+                        if (d.status === 'pruned') {
+                            ctx.fillStyle = '#ef4444'; // rose text
+                            ctx.fillText(`剪枝`, node.x, node.y + this.styles.nodeRadius + 14);
+                        } else {
+                            ctx.fillStyle = '#64748b'; // slate text
+                            ctx.fillText(`bb:${d.bb}`, node.x, node.y + this.styles.nodeRadius + 14);
+                        }
+                    }
+                }
+
+                ctx.restore();
+            }
+
+            // 交互：拖拽与缩放控制
+            pan(dx, dy) {
+                this.camera.targetX += dx;
+                this.camera.targetY += dy;
+            }
+            zoom(delta) {
+                this.camera.targetScale = Math.max(0.2, Math.min(3, this.camera.targetScale - delta * 0.001));
+            }
+        }
+
+
+        // ====== Vue 应用入口 ======
+        createApp({
+            setup() {
+                // 定义问题输入：4个作业
+                const jobs = ref([
+                    { id: 0, t1: 2, t2: 1 },
+                    { id: 1, t1: 3, t2: 1 },
+                    { id: 2, t1: 2, t2: 3 },
+                    { id: 3, t1: 1, t2: 2 }
+                ]);
+
+                // 核心状态数据
+                const steps = ref([]);
+                const currentStepIndex = ref(0);
+                const currentStep = computed(() => steps.value[currentStepIndex.value] || null);
+                
+                // DOM 引用与引擎实例
+                const treeCanvas = ref(null);
+                const canvasWrapper = ref(null);
+                let renderer = null;
+
+                // 播放控制状态
+                const isPlaying = ref(false);
+                const speedSlider = ref(5); // 1-10 挡位
+                const currentPlayInterval = ref(800); // 毫秒
+                let playTimer = null;
+
+                // 甘特图 X 轴基准（为了固定比例）
+                const maxGanttTime = 25; 
+
+                // 格式化输出辅助函数
+                const formatPathArray = (arr) => {
+                    if (!arr || arr.length === 0) return '无';
+                    return '[' + arr.map(id => `J${id+1}`).join(', ') + ']';
+                };
+                const getJobColor = (id) => JOB_COLORS[id % JOB_COLORS.length];
+
+                // 甘特图数据计算
+                const getGanttData = (nodeData) => {
+                    if (!nodeData) return { m1: [], m2: [] };
+                    let m1 = [], m2 = [];
+                    let cM1 = 0, cM2 = 0;
+                    for (let id of nodeData.path) {
+                        let j = jobs.value[id];
+                        m1.push({ id, start: cM1, duration: j.t1 });
+                        cM1 += j.t1;
+                        let startM2 = Math.max(cM1, cM2);
+                        m2.push({ id, start: startM2, duration: j.t2 });
+                        cM2 = startM2 + j.t2;
+                    }
+                    return { m1, m2 };
+                };
+
+                // Canvas 交互事件转发
+                const onCanvasDragStart = (e) => {
+                    if (!renderer) return;
+                    renderer.isDragging = true;
+                    renderer.dragStart = { x: e.clientX, y: e.clientY };
+                };
+                const onCanvasDragMove = (e) => {
+                    if (!renderer || !renderer.isDragging) return;
+                    const dx = e.clientX - renderer.dragStart.x;
+                    const dy = e.clientY - renderer.dragStart.y;
+                    renderer.pan(dx, dy);
+                    renderer.dragStart = { x: e.clientX, y: e.clientY };
+                };
+                const onCanvasDragEnd = () => { if (renderer) renderer.isDragging = false; };
+                const onCanvasWheel = (e) => {
+                    e.preventDefault();
+                    if (renderer) renderer.zoom(e.deltaY);
+                };
+
+                // 播放器控制逻辑
+                const executePlayStep = () => {
+                    if (currentStepIndex.value < steps.value.length - 1) {
+                        currentStepIndex.value++;
+                        playTimer = setTimeout(executePlayStep, currentPlayInterval.value);
+                    } else {
+                        pause();
+                    }
+                };
+                const play = () => {
+                    if (currentStepIndex.value >= steps.value.length - 1) currentStepIndex.value = 0;
+                    isPlaying.value = true;
+                    clearTimeout(playTimer);
+                    playTimer = setTimeout(executePlayStep, currentPlayInterval.value);
+                };
+                const pause = () => {
+                    isPlaying.value = false;
+                    clearTimeout(playTimer);
+                };
+                const nextStep = () => {
+                    pause();
+                    if (currentStepIndex.value < steps.value.length - 1) currentStepIndex.value++;
+                };
+                const prevStep = () => {
+                    pause();
+                    if (currentStepIndex.value > 0) currentStepIndex.value--;
+                };
+                const reset = () => {
+                    pause();
+                    currentStepIndex.value = 0;
+                    if (renderer) renderer.camera.targetScale = 1; // reset zoom
+                };
+                const updateSpeed = () => {
+                    // slider 1=最慢(2000ms), 10=最快(200ms)
+                    currentPlayInterval.value = 2000 - (speedSlider.value - 1) * 200;
+                };
+
+                // 监听步骤变化以驱动 Canvas 引擎
+                watch(currentStepIndex, () => {
+                    if (renderer && currentStep.value) {
+                        let activeId = currentStep.value.currentNode ? currentStep.value.currentNode.id : null;
+                        renderer.updateData(currentStep.value.treeNodes, activeId);
+                    }
+                });
+
+                // 生命周期初始化
+                onMounted(() => {
+                    // 1. 初始化算法求解器并跑出所有快照
+                    const solver = new FlowShopSolver(jobs.value);
+                    steps.value = solver.generateAllSteps();
+
+                    // 2. 初始化自研高性能 Canvas 引擎
+                    nextTick(() => {
+                        renderer = new HighPerformanceTreeRenderer(treeCanvas.value);
+                        // 投喂第一帧数据
+                        if (currentStep.value) {
+                            renderer.updateData(currentStep.value.treeNodes, currentStep.value.currentNode?.id);
+                        }
+                    });
+                });
+
+                onUnmounted(() => {
+                    if (renderer) renderer.destroy();
+                    clearTimeout(playTimer);
+                });
+
+                return {
+                    jobs, steps, currentStepIndex, currentStep, maxGanttTime,
+                    isPlaying, speedSlider, currentPlayInterval,
+                    treeCanvas, canvasWrapper,
+                    formatPathArray, getJobColor, getGanttData,
+                    play, pause, nextStep, prevStep, reset, updateSpeed,
+                    onCanvasDragStart, onCanvasDragMove, onCanvasDragEnd, onCanvasWheel
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

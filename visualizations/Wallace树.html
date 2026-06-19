@@ -147,10 +147,10 @@
         let maxStageLimit = 10;
         
         while (Math.max(...currentHeights) > 2 && maxStageLimit > 0) {
-          const nextHeights = new Array(16).fill(0);
+          const nextHeights = new Array(17).fill(0);
           const stageInfo = [];
 
-          for (let col = 0; col < 15; col++) {
+          for (let col = 0; col < 16; col++) {
             const h = currentHeights[col];
             const fa = Math.floor(h / 3); 
             let rem = h % 3;
@@ -264,7 +264,7 @@
         const colWidth = width / numCols;
         const bottomY = height - 60;
         
-        for (let col = 0; col < 15; col++) {
+        for (let col = 0; col < 16; col++) {
           const x = width - (col * colWidth) - (colWidth / 2);
           const info = stageData.info[col];
           

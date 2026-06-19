@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>分支限界法：最大团问题动态演示</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 核心动画：放大再缩小回原样 */
+        @keyframes pulse-pop {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.15); box-shadow: 0 0 15px rgba(59, 130, 246, 0.5); }
+            100% { transform: scale(1); }
+        }
+        
+        .anim-pop {
+            animation: pulse-pop 0.6s ease-in-out;
+        }
+
+        /* 隐藏滚动条但保持可滚动，让界面更整洁 */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* 矩阵单元格基础样式 */
+        .matrix-cell {
+            transition: all 0.3s ease;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans h-screen p-4 box-border flex flex-col">
+
+<div id="app" class="flex flex-col h-full max-w-7xl mx-auto w-full bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200">
+    
+    <!-- 顶部控制栏 (固定边界) -->
+    <div class="h-20 bg-slate-800 text-white flex items-center justify-between px-6 shrink-0">
+        <div>
+            <h1 class="text-2xl font-bold tracking-wider">分支限界法求解最大团</h1>
+            <p class="text-xs text-slate-300 mt-1">基于邻接矩阵与子集树搜索的无连线可视化</p>
+        </div>
+        
+        <div class="flex items-center gap-4 bg-slate-700 p-2 rounded-lg">
+            <button @click="reset" class="px-4 py-1.5 bg-slate-600 hover:bg-slate-500 rounded text-sm font-semibold transition">重置</button>
+            <button @click="prevStep" :disabled="currentStepIndex <= 0" class="px-4 py-1.5 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 rounded text-sm font-semibold transition">上一步</button>
+            <button @click="togglePlay" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-sm font-semibold transition w-24 text-center">
+                {{ isPlaying ? '暂停' : '自动播放' }}
+            </button>
+            <button @click="nextStep" :disabled="currentStepIndex >= steps.length - 1" class="px-4 py-1.5 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 rounded text-sm font-semibold transition">下一步</button>
+            
+            <div class="flex items-center gap-2 ml-4 pl-4 border-l border-slate-500">
+                <span class="text-xs text-slate-300">播放速度</span>
+                <input type="range" min="1" max="10" v-model="speed" @input="updateSpeed" class="w-24 cursor-pointer">
+            </div>
+        </div>
+    </div>
+
+    <!-- 主体内容区 (固定边界布局) -->
+    <div class="flex flex-1 overflow-hidden">
+        
+        <!-- 左侧：图的表示（邻接矩阵）与顶点状态 (固定宽度 50%) -->
+        <div class="w-1/2 p-6 flex flex-col border-r border-slate-200 bg-slate-50 overflow-y-auto no-scrollbar">
+            
+            <!-- 邻接矩阵 -->
+            <div class="mb-8">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-bold text-slate-700 border-l-4 border-blue-500 pl-2">图的表示：邻接矩阵</h2>
+                    <span class="text-xs text-slate-500 bg-slate-200 px-2 py-1 rounded">1 = 相连, 0 = 不相连</span>
+                </div>
+                
+                <div class="flex justify-center">
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 inline-block">
+                        <div class="grid grid-cols-6 gap-1 text-center">
+                            <!-- 表头 -->
+                            <div class="w-10 h-10"></div>
+                            <div v-for="i in n" :key="'h'+i" class="w-10 h-10 flex items-center justify-center font-bold text-slate-500">V{{i}}</div>
+                            
+                            <!-- 矩阵内容 -->
+                            <template v-for="(row, i) in matrix" :key="'r'+i">
+                                <div class="w-10 h-10 flex items-center justify-center font-bold text-slate-500">V{{i+1}}</div>
+                                <div v-for="(val, j) in row" :key="'c'+i+'-'+j" 
+                                     class="matrix-cell w-10 h-10 flex items-center justify-center rounded font-mono text-lg"
+                                     :class="[
+                                        val === 1 ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-300',
+                                        isCellActive(i+1, j+1) ? 'ring-2 ring-yellow-400 bg-yellow-100 text-yellow-800 font-bold' : ''
+                                     ]">
+                                    {{val}}
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 顶点状态区 -->
+            <div class="flex-1 flex flex-col">
+                <h2 class="text-lg font-bold text-slate-700 border-l-4 border-blue-500 pl-2 mb-4">当前决策状态</h2>
+                <div class="flex flex-wrap gap-4 justify-center bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex-1 content-start">
+                    
+                    <div v-for="i in n" :key="'node'+i" 
+                         :id="'node-'+i"
+                         class="w-16 h-16 rounded-full flex items-center justify-center font-bold text-lg border-2 transition-all duration-300"
+                         :class="getNodeClass(i)">
+                        V{{i}}
+                    </div>
+
+                </div>
+                <!-- 状态图例 -->
+                <div class="flex justify-center gap-6 mt-4 text-sm font-medium text-slate-600">
+                    <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-slate-100 border-2 border-slate-300"></div>待处理</div>
+                    <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-yellow-300 border-2 border-yellow-500"></div>正在评估</div>
+                    <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-green-500 border-2 border-green-600 text-white"></div>已加入团</div>
+                    <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-red-100 border-2 border-red-300"></div>排除在外</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：算法执行信息与日志 (固定宽度 50%) -->
+        <div class="w-1/2 flex flex-col bg-white">
+            
+            <!-- 核心变量监控面板 (固定高度区) -->
+            <div class="h-48 border-b border-slate-200 p-6 flex flex-col justify-center bg-slate-50 shrink-0">
+                <h2 class="text-lg font-bold text-slate-700 mb-4 flex items-center justify-between">
+                    <span>算法变量追踪</span>
+                    <span class="text-sm font-normal text-slate-500">当前进度: {{currentStepIndex + 1}} / {{steps.length}}</span>
+                </h2>
+                
+                <div class="grid grid-cols-3 gap-4">
+                    <!-- 当前团 -->
+                    <div id="var-current" class="bg-white border border-slate-200 rounded-lg p-3 shadow-sm text-center">
+                        <div class="text-xs text-slate-500 mb-1">当前正在构建的团</div>
+                        <div class="font-mono text-lg font-bold text-blue-600 min-h-[28px]">
+                            {{ formatSet(currentStep.currentClique) }}
+                        </div>
+                        <div class="text-xs mt-1 text-slate-400">大小 (cn): {{ currentStep.currentClique ? currentStep.currentClique.length : 0 }}</div>
+                    </div>
+
+                    <!-- 限界计算 -->
+                    <div id="var-bound" class="bg-white border border-slate-200 rounded-lg p-3 shadow-sm text-center relative overflow-hidden">
+                        <!-- 剪枝高亮背景 -->
+                        <div v-if="currentStep.isPruning" class="absolute inset-0 bg-red-500 opacity-10"></div>
+                        
+                        <div class="text-xs text-slate-500 mb-1 relative z-10">理论可能的最大值(强上界)</div>
+                        <div class="font-mono text-lg font-bold min-h-[28px] relative z-10" :class="currentStep.isPruning ? 'text-red-600' : 'text-slate-700'">
+                            {{ currentStep.bound !== null ? currentStep.bound : '-' }}
+                        </div>
+                        <div class="text-xs mt-1 text-slate-400 relative z-10" v-if="currentStep.currentNode <= n">
+                            cn + 剩余可行顶点({{ currentStep.feasibleRemainingCount !== undefined ? currentStep.feasibleRemainingCount : 0 }})
+                        </div>
+                    </div>
+
+                    <!-- 历史最优 -->
+                    <div id="var-best" class="bg-indigo-50 border border-indigo-200 rounded-lg p-3 shadow-sm text-center">
+                        <div class="text-xs text-indigo-500 mb-1">历史已知最大团</div>
+                        <div class="font-mono text-lg font-bold text-indigo-700 min-h-[28px]">
+                            {{ formatSet(currentStep.bestClique) }}
+                        </div>
+                        <div class="text-xs mt-1 text-indigo-400">最大值 (bestn): {{currentStep.bestn}}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 执行日志 (占满剩余空间，可滚动) -->
+            <div class="flex-1 p-6 flex flex-col overflow-hidden">
+                <h2 class="text-lg font-bold text-slate-700 border-l-4 border-indigo-500 pl-2 mb-4 shrink-0">执行逻辑分析</h2>
+                
+                <div class="flex-1 overflow-y-auto pr-2 no-scrollbar" id="log-container">
+                    <div class="space-y-3">
+                        <div v-for="(log, idx) in logHistory" :key="idx" 
+                             class="p-4 rounded-lg border text-sm transition-all duration-300"
+                             :class="[
+                                idx === logHistory.length - 1 ? 'border-blue-400 bg-blue-50 shadow-md transform scale-[1.02]' : 'border-slate-100 bg-slate-50 text-slate-500 opacity-70',
+                                log.isPruning && idx === logHistory.length - 1 ? 'border-red-400 bg-red-50' : '',
+                                log.isNewBest && idx === logHistory.length - 1 ? 'border-green-400 bg-green-50' : ''
+                             ]">
+                             <div class="font-bold mb-1" 
+                                  :class="log.isPruning ? 'text-red-600' : (log.isNewBest ? 'text-green-600' : 'text-blue-700')">
+                                {{ log.title }}
+                             </div>
+                             <div class="leading-relaxed">{{ log.desc }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, computed, watch, onMounted, nextTick } = Vue;
+
+    createApp({
+        setup() {
+            // 图的数据设置：5个顶点的图
+            const n = 5;
+            // 构造一个稍微复杂的邻接矩阵
+            // 最大团是 {1, 2, 3, 4}
+            const matrix = [
+                [0, 1, 1, 1, 0], // V1 连 2,3,4
+                [1, 0, 1, 1, 1], // V2 连 1,3,4,5
+                [1, 1, 0, 1, 1], // V3 连 1,2,4,5
+                [1, 1, 1, 0, 0], // V4 连 1,2,3
+                [0, 1, 1, 0, 0]  // V5 连 2,3
+            ];
+
+            // 状态变量
+            const steps = ref([]);
+            const currentStepIndex = ref(0);
+            
+            // 播放控制
+            const isPlaying = ref(false);
+            const speed = ref(6); // 1-10
+            let playInterval = null;
+
+            // 工具方法：格式化集合为 {1, 2} 
+            // 提前声明，确保 generateSteps 内部调用时已初始化完成
+            const formatSet = (arr) => {
+                if (!arr || arr.length === 0) return "∅";
+                return "{ " + arr.join(", ") + " }";
+            };
+
+            // 预先计算所有步骤（模拟递归栈并保存快照）
+            const generateSteps = () => {
+                let tempSteps = [];
+                let currentClique = [];
+                let bestClique = [];
+                let bestn = 0;
+
+                // 初始快照
+                tempSteps.push({
+                    currentNode: 1,
+                    currentClique: [],
+                    bestClique: [],
+                    bestn: 0,
+                    bound: null,
+                    checkMatrix: null,
+                    statusMap: {}, // 记录每个节点的状态: 'waiting', 'evaluating', 'included', 'excluded'
+                    title: "算法开始",
+                    desc: "初始化状态。我们将从顶点 V1 开始，逐个决定是否将其加入团中。",
+                    pulseTarget: null,
+                    feasibleRemainingCount: 5
+                });
+
+                function backtrack(i, statusMapRaw) {
+                    let statusMap = {...statusMapRaw}; // 深拷贝当前状态图
+                    
+                    if (i <= n) {
+                        let feasibleRemaining = [];
+                        for (let u = i; u <= n; u++) {
+                            let connected = true;
+                            for (let v of currentClique) {
+                                if (matrix[u-1][v-1] === 0) {
+                                    connected = false;
+                                    break;
+                                }
+                            }
+                            if (connected) {
+                                feasibleRemaining.push(u);
+                            }
+                        }
+                        let bound = currentClique.length + feasibleRemaining.length;
+                        if (bound <= bestn) {
+                            tempSteps.push({
+                                currentNode: i, currentClique: [...currentClique], bestClique: [...bestClique], bestn, bound: bound, checkMatrix: null, statusMap: {...statusMap},
+                                title: `限界剪枝 (V${i})`,
+                                desc: `在探索包含/不包含 V${i} 的分支前评估上界。当前团大小(${currentClique.length}) + 剩余可行点${formatSet(feasibleRemaining)} 的数量 = 强上界 ${bound}。此界限已无法超越当前最优 ${bestn}，执行剪枝并回溯。`,
+                                pulseTarget: 'var-bound',
+                                feasibleRemainingCount: feasibleRemaining.length
+                            });
+                            return;
+                        }
+                    }
+
+                    if (i > n) {
+                        if (currentClique.length > bestn) {
+                            bestn = currentClique.length;
+                            bestClique = [...currentClique];
+                            tempSteps.push({
+                                currentNode: i, currentClique: [...currentClique], bestClique: [...bestClique], bestn, bound: null, checkMatrix: null, statusMap: {...statusMap},
+                                isNewBest: true,
+                                title: "到达叶子节点：发现新记录！",
+                                desc: `所有顶点处理完毕。当前团大小为 ${bestn}，打破历史记录！更新最佳团。`,
+                                pulseTarget: 'var-best',
+                                feasibleRemainingCount: 0
+                            });
+                        } else {
+                            tempSteps.push({
+                                currentNode: i, currentClique: [...currentClique], bestClique: [...bestClique], bestn, bound: null, checkMatrix: null, statusMap: {...statusMap},
+                                title: "到达叶子节点",
+                                desc: `所有顶点处理完毕。当前团大小未超过历史最优(${bestn})。回溯。`,
+                                pulseTarget: null,
+                                feasibleRemainingCount: 0
+                            });
+                        }
+                        return;
+                    }
+
+                    statusMap[i] = 'evaluating';
+                    tempSteps.push({
+                        currentNode: i, currentClique: [...currentClique], bestClique: [...bestClique], bestn, bound: null, checkMatrix: null, statusMap: {...statusMap},
+                        title: `左分支：评估顶点 V${i}`,
+                        desc: `准备决定是否将 V${i} 加入当前团。前提是它必须与当前团内的所有顶点相连。`,
+                        pulseTarget: `node-${i}`,
+                        feasibleRemainingCount: n - i + 1
+                    });
+
+                    // 检查是否可以加入当前团
+                    let canAdd = true;
+                    let checkEdges = [];
+                    for (let v of currentClique) {
+                        checkEdges.push([i, v]);
+                        if (matrix[i-1][v-1] === 0) {
+                            canAdd = false;
+                        }
+                    }
+
+                    if (currentClique.length > 0) {
+                         tempSteps.push({
+                            currentNode: i, currentClique: [...currentClique], bestClique: [...bestClique], bestn, bound: null, checkMatrix: checkEdges, statusMap: {...statusMap},
+                            title: `连通性检查 (V${i})`,
+                            desc: `检查 V${i} 与已在团中的顶点 ${formatSet(currentClique)} 的连接情况。结果：${canAdd ? '全部相连，可以加入。' : '不完全相连，由于可行性冲突，左分支直接剪枝！'}`,
+                            pulseTarget: null,
+                            feasibleRemainingCount: n - i + 1
+                        });
+                    }
+
+                    if (canAdd) {
+                        currentClique.push(i);
+                        statusMap[i] = 'included';
+                        tempSteps.push({
+                            currentNode: i+1, currentClique: [...currentClique], bestClique: [...bestClique], bestn, bound: null, checkMatrix: null, statusMap: {...statusMap},
+                            title: `执行左分支 (V${i})`,
+                            desc: `V${i} 已成功加入当前团。继续向下搜索 V${i+1}。`,
+                            pulseTarget: `node-${i}`,
+                            feasibleRemainingCount: n - i
+                        });
+                        
+                        backtrack(i + 1, statusMap);
+                        
+                        currentClique.pop();
+                        statusMap[i] = 'evaluating'; // 回溯回来
+                        tempSteps.push({
+                            currentNode: i, currentClique: [...currentClique], bestClique: [...bestClique], bestn, bound: null, checkMatrix: null, statusMap: {...statusMap},
+                            title: `回溯 (V${i})`,
+                            desc: `从左分支返回，将 V${i} 从当前团中移出，准备探索不包含 V${i} 的右分支。`,
+                            pulseTarget: `node-${i}`,
+                            feasibleRemainingCount: n - i
+                        });
+                    }
+
+                    // 右分支：不加入 i，计算上界 (这里引入强可行性限界剪枝)
+                    statusMap[i] = 'excluded';
+                    let currentCn = currentClique.length;
+                    
+                    // 【核心升级】：过滤掉与当前团内节点不相连的剩余顶点
+                    let feasibleRemaining = [];
+                    for (let u = i + 1; u <= n; u++) {
+                        let uCanAdd = true;
+                        for (let v of currentClique) {
+                            if (matrix[u-1][v-1] === 0) {
+                                uCanAdd = false;
+                                break;
+                            }
+                        }
+                        if (uCanAdd) {
+                            feasibleRemaining.push(u);
+                        }
+                    }
+                    let bound = currentCn + feasibleRemaining.length;
+                    
+                    tempSteps.push({
+                        currentNode: i, currentClique: [...currentClique], bestClique: [...bestClique], bestn, bound: bound, checkMatrix: null, statusMap: {...statusMap},
+                        feasibleRemainingCount: feasibleRemaining.length,
+                        title: `右分支：强限界检查 (不包含 V${i})`,
+                        desc: `若放弃 V${i}，后面只有既能与当前团 ${formatSet(currentClique)} 完全相连、又未被决定的顶点 ${formatSet(feasibleRemaining)} 才有机会入选。强上界 = 当前团大小(${currentCn}) + 剩余可行数(${feasibleRemaining.length}) = ${bound}。历史最优为 ${bestn}。`,
+                        pulseTarget: 'var-bound'
+                    });
+
+                    if (bound > bestn) {
+                         tempSteps.push({
+                            currentNode: i+1, currentClique: [...currentClique], bestClique: [...bestClique], bestn, bound: bound, checkMatrix: null, statusMap: {...statusMap},
+                            feasibleRemainingCount: feasibleRemaining.length,
+                            title: `通过限界，继续探索`,
+                            desc: `强上界 ${bound} > 最优 ${bestn}，右子树依然有希望，继续搜索 V${i+1}。`,
+                            pulseTarget: null
+                        });
+                        backtrack(i + 1, statusMap);
+                    } else {
+                         tempSteps.push({
+                            currentNode: i, currentClique: [...currentClique], bestClique: [...bestClique], bestn, bound: bound, checkMatrix: null, statusMap: {...statusMap},
+                            feasibleRemainingCount: feasibleRemaining.length,
+                            isPruning: true,
+                            title: `触发强限界剪枝！`,
+                            desc: `强上界 ${bound} <= 最优 ${bestn}。这意味着就算后面的可行点全选上，也绝不可能超过已知记录。果断剪去右子树！`,
+                            pulseTarget: 'var-bound'
+                        });
+                    }
+                    
+                    statusMap[i] = 'waiting'; // 回溯彻底结束，重置为等待
+                }
+
+                let initStatus = {};
+                for(let k=1; k<=n; k++) initStatus[k] = 'waiting';
+                backtrack(1, initStatus);
+                
+                tempSteps.push({
+                    currentNode: n+1, currentClique: [...bestClique], bestClique: [...bestClique], bestn, bound: null, checkMatrix: null, statusMap: initStatus,
+                    title: "算法结束",
+                    desc: `搜索空间遍历（含剪枝）完毕。最大团已找到：${formatSet(bestClique)}，包含 ${bestn} 个顶点。`,
+                    pulseTarget: 'var-best',
+                    feasibleRemainingCount: 0
+                });
+
+                steps.value = tempSteps;
+            };
+
+            // 直接在 setup 阶段同步生成步骤数据，避免初次渲染时 steps 为空
+            generateSteps();
+
+            // 获取当前步骤的数据，加入完整默认结构确保初始渲染安全
+            const currentStep = computed(() => {
+                return steps.value[currentStepIndex.value] || {
+                    currentClique: [],
+                    bestClique: [],
+                    bestn: 0,
+                    bound: null,
+                    currentNode: 1,
+                    statusMap: {},
+                    feasibleRemainingCount: 0
+                };
+            });
+
+            // 历史日志列表
+            const logHistory = computed(() => {
+                return steps.value.slice(0, currentStepIndex.value + 1);
+            });
+
+            // 节点样式类计算
+            const getNodeClass = (i) => {
+                const status = currentStep.value.statusMap ? currentStep.value.statusMap[i] : 'waiting';
+                if (status === 'included') return 'bg-green-500 border-green-600 text-white shadow-md';
+                if (status === 'excluded') return 'bg-red-50 border-red-200 text-red-300 opacity-60';
+                if (status === 'evaluating') return 'bg-yellow-300 border-yellow-500 text-yellow-900 shadow-md ring-4 ring-yellow-100';
+                return 'bg-slate-50 border-slate-300 text-slate-400'; // waiting
+            };
+
+            // 判断矩阵单元格是否被高亮（检查连通性时）
+            const isCellActive = (row, col) => {
+                const checks = currentStep.value.checkMatrix;
+                if (!checks) return false;
+                for (let pair of checks) {
+                    if ((pair[0] === row && pair[1] === col) || (pair[0] === col && pair[1] === row)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            // 动画触发逻辑
+            const triggerAnimation = () => {
+                const targetId = currentStep.value.pulseTarget;
+                if (targetId) {
+                    nextTick(() => {
+                        const el = document.getElementById(targetId);
+                        if (el) {
+                            // 移除旧动画类触发重绘，然后重新添加
+                            el.classList.remove('anim-pop');
+                            void el.offsetWidth; // 触发回流
+                            el.classList.add('anim-pop');
+                        }
+                    });
+                }
+                
+                // 滚动日志到底部
+                nextTick(() => {
+                    const logContainer = document.getElementById('log-container');
+                    if (logContainer) {
+                        logContainer.scrollTop = logContainer.scrollHeight;
+                    }
+                });
+            };
+
+            // 控制方法
+            const nextStep = () => {
+                if (currentStepIndex.value < steps.value.length - 1) {
+                    currentStepIndex.value++;
+                    triggerAnimation();
+                } else if (isPlaying.value) {
+                    togglePlay();
+                }
+            };
+
+            const prevStep = () => {
+                if (currentStepIndex.value > 0) {
+                    currentStepIndex.value--;
+                    triggerAnimation();
+                }
+            };
+
+            const reset = () => {
+                if (isPlaying.value) togglePlay();
+                currentStepIndex.value = 0;
+                triggerAnimation();
+            };
+
+            // 自动播放控制
+            const togglePlay = () => {
+                isPlaying.value = !isPlaying.value;
+                if (isPlaying.value) {
+                    if (currentStepIndex.value >= steps.value.length - 1) {
+                        currentStepIndex.value = 0;
+                    }
+                    startInterval();
+                } else {
+                    stopInterval();
+                }
+            };
+
+            const startInterval = () => {
+                stopInterval();
+                // 速度映射：值域 1-10，转换为毫秒 (速度1最慢 3000ms, 速度10最快 300ms)
+                const delay = 3300 - (speed.value * 300);
+                playInterval = setInterval(nextStep, delay);
+            };
+
+            const stopInterval = () => {
+                if (playInterval) {
+                    clearInterval(playInterval);
+                    playInterval = null;
+                }
+            };
+
+            const updateSpeed = () => {
+                if (isPlaying.value) {
+                    startInterval(); // 重新开始计时器以应用新速度
+                }
+            };
+
+            // 监听索引变化确保滚动
+            watch(currentStepIndex, () => {
+               // 额外的滚动保障
+               setTimeout(() => {
+                    const logContainer = document.getElementById('log-container');
+                    if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
+               }, 50);
+            });
+
+            return {
+                n, matrix, steps, currentStepIndex, currentStep, logHistory,
+                isPlaying, speed,
+                formatSet, getNodeClass, isCellActive,
+                nextStep, prevStep, reset, togglePlay, updateSpeed
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>

@@ -8,7 +8,7 @@
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <!-- Include Babel for in-browser JSX compilation -->
-    <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script crossorigin src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
     <!-- Include Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -210,7 +210,7 @@
                                             <div className="bg-tagBg border border-tagBorder p-2 rounded flex flex-col">
                                                 <span className="text-tagText font-bold mb-1">Tag (35 bits)</span>
                                                 <span className="font-mono text-[10px] break-all">{TagBits}</span>
-                                                <span className="font-bold mt-1 text-tagText border-t border-red-200 pt-1">0x3f7262a17</span>
+                                                <span className="font-bold mt-1 text-tagText border-t border-red-200 pt-1">0x7f7262a1e</span>
                                             </div>
                                             <div className="bg-setBg border border-setBorder p-2 rounded flex flex-col">
                                                 <span className="text-setText font-bold mb-1">Set (6 bits)</span>
@@ -284,7 +284,7 @@
                                                                 <span className={currentStep >= 5 && isHitTarget ? "font-bold text-green-600" : "text-gray-400"}>v=1</span>
                                                             </div>
                                                             <div className={`truncate ${currentStep >= 5 && isHitTarget ? 'text-red-600 font-bold bg-red-50' : 'text-gray-400'}`}>
-                                                                Tag: {currentStep >= 5 && isHitTarget ? '0x3f7262a17' : '0x...'}
+                                                                Tag: {currentStep >= 5 && isHitTarget ? '0x7f7262a1e' : '0x...'}
                                                             </div>
                                                             
                                                             {/* Data Block Visualization */}
@@ -335,7 +335,7 @@
                                 {currentStep >= 4 && (
                                     <div className="absolute bottom-4 right-4 max-w-sm bg-gray-800 text-white p-4 rounded-lg shadow-2xl border border-gray-600 text-sm z-30 fade-in">
                                         {currentStep === 4 && <p>首先，提取地址中间的 <b>Set Index (0x00)</b>，将搜索范围缩小到 Cache 的 <b>Set 0</b>。由于是 8 路组相联，我们需要在这个集合的 8 个位置中寻找。</p>}
-                                        {currentStep === 5 && <p>在 Set 0 的 8 路 (Ways) 中，硬件会<b>并行比对</b>有效位(v=1) 和 <b>Tag (0x3f7262a17)</b>。这里我们假设在 Way 2 找到了匹配（Hit）。</p>}
+                                        {currentStep === 5 && <p>在 Set 0 的 8 路 (Ways) 中，硬件会<b>并行比对</b>有效位(v=1) 和 <b>Tag (0x7f7262a1e)</b>。这里我们假设在 Way 2 找到了匹配（Hit）。</p>}
                                         {currentStep === 6 && <p>一旦 Tag 命中，整块 64 字节的数据就找到了。最后，使用 <b>Block Offset (0x10 = 16)</b> 从这 64 字节中精确地提取出 CPU 请求的字或字节。寻址完成！</p>}
                                     </div>
                                 )}

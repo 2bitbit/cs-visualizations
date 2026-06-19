@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>最优批处理问题 (Optimal Batch Processing) - DP 演示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; color: #1f2937; }
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.5s ease; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
+        .highlight-bg { background-color: #fef08a; transition: background-color 0.3s; } /* yellow-200 */
+        .calculating-bg { background-color: #bfdbfe; transition: background-color 0.3s; } /* blue-200 */
+        .optimal-bg { background-color: #86efac; transition: background-color 0.3s; } /* green-300 */
+        .table-cell { transition: all 0.3s ease; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+<div id="app" class="max-w-6xl mx-auto">
+    <header class="mb-6 text-center">
+        <h1 class="text-3xl font-bold text-gray-800 mb-2">最优批处理问题动态规划演示</h1>
+        <p class="text-gray-600 text-sm">理解“费用提前计算”思想与倒序DP状态转移</p>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- 左侧：参数、控制面板和状态信息 -->
+        <div class="lg:col-span-1 flex flex-col gap-4">
+            
+            <!-- 全局参数配置 -->
+            <div class="bg-white p-4 rounded-xl shadow-md border border-gray-200">
+                <h2 class="text-xl font-semibold mb-3 border-b pb-2 flex items-center justify-between">
+                    <span>全局参数 (Input)</span>
+                    <button @click="resetToInitial" class="text-sm px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 transition">重置数据</button>
+                </h2>
+                <div class="flex items-center gap-4 mb-2">
+                    <label class="font-medium w-24">准备时间 S:</label>
+                    <input type="number" v-model.number="S" class="border rounded p-1 w-20 text-center" :disabled="isRunning">
+                </div>
+                
+                <div class="mt-4">
+                    <p class="font-medium text-sm text-gray-500 mb-1">任务数据 (Task Data):</p>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full text-center text-sm border-collapse border border-gray-300">
+                            <thead>
+                                <tr class="bg-gray-100">
+                                    <th class="border border-gray-300 px-2 py-1">任务 i</th>
+                                    <th v-for="i in n" :key="'h'+i" class="border border-gray-300 px-2 py-1">{{ i }}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td class="border border-gray-300 font-medium py-1">耗时 T</td>
+                                    <td v-for="(t, idx) in T.slice(1)" :key="'t'+idx" class="border border-gray-300 py-1">
+                                        <input type="number" v-model.number="T[idx+1]" class="w-10 text-center border rounded" :disabled="isRunning">
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td class="border border-gray-300 font-medium py-1">权重 F</td>
+                                    <td v-for="(f, idx) in F.slice(1)" :key="'f'+idx" class="border border-gray-300 py-1">
+                                        <input type="number" v-model.number="F[idx+1]" class="w-10 text-center border rounded" :disabled="isRunning">
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 控制面板 -->
+            <div class="bg-white p-4 rounded-xl shadow-md border border-blue-200">
+                <h2 class="text-xl font-semibold mb-3 border-b pb-2 text-blue-800">控制面板 (Controls)</h2>
+                <div class="flex flex-wrap gap-2">
+                    <button @click="startSimulation" v-if="!isRunning && !isFinished" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 font-medium shadow transition">
+                        开始推导 (Start)
+                    </button>
+                    <button @click="stepForward" :disabled="!isRunning || isFinished" class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 font-medium shadow transition disabled:opacity-50 disabled:cursor-not-allowed flex-1">
+                        单步执行 (Step)
+                    </button>
+                    <button @click="resetSimulation" class="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600 font-medium shadow transition">
+                        重新开始 (Reset)
+                    </button>
+                </div>
+                
+                <div class="mt-4 p-3 bg-gray-50 rounded-lg text-sm">
+                    <p class="font-bold text-gray-700 mb-1">当前状态说明：</p>
+                    <p class="text-gray-600">{{ statusMessage }}</p>
+                </div>
+            </div>
+
+            <!-- DP 状态表 -->
+            <div class="bg-white p-4 rounded-xl shadow-md border border-gray-200 flex-1 flex flex-col">
+                <h2 class="text-xl font-semibold mb-3 border-b pb-2">DP 数组 (DP Table)</h2>
+                <p class="text-xs text-gray-500 mb-2">DP[i]: 任务 i 到 n 划分为批次的最小总费用。<br/>推导顺序：从右向左 (i 从 n 递减到 1)。</p>
+                <div class="overflow-x-auto flex-1">
+                    <table class="min-w-full text-center border-collapse border border-gray-300 shadow-sm">
+                        <thead>
+                            <tr class="bg-gray-800 text-white">
+                                <th class="border border-gray-600 px-3 py-2 w-16">i</th>
+                                <th class="border border-gray-600 px-3 py-2">DP[i] 最小费用</th>
+                                <th class="border border-gray-600 px-3 py-2 text-xs">最优切分点 j<br/>(当前批: i~j)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="i in n + 1" :key="'dp'+i" 
+                                :class="{'bg-gray-100': i > n, 'font-bold text-green-700 optimal-bg': isFinished && i===1 && !isAnimating}">
+                                <td class="border border-gray-300 px-3 py-2 bg-gray-50">
+                                    {{ i }}
+                                    <span v-if="i > n" class="text-xs text-gray-400 block">(边界)</span>
+                                </td>
+                                <td class="border border-gray-300 px-3 py-2 table-cell" :class="getDpCellClass(i)">
+                                    <span v-if="DP[i] !== Infinity">{{ DP[i] }}</span>
+                                    <span v-else class="text-gray-300 text-xl">&infin;</span>
+                                </td>
+                                <td class="border border-gray-300 px-3 py-2 text-sm text-gray-500">
+                                    <span v-if="bestJ[i] !== -1 && DP[i] !== Infinity">{{ bestJ[i] }}</span>
+                                    <span v-else>-</span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 右侧：计算详情和公式演示 -->
+        <div class="lg:col-span-2 flex flex-col gap-4">
+            
+            <!-- 公式解析区 -->
+            <div class="bg-white p-5 rounded-xl shadow-md border border-indigo-200">
+                <h2 class="text-xl font-semibold mb-3 text-indigo-800 border-b pb-2">核心状态转移方程解析</h2>
+                
+                <div class="bg-indigo-50 p-4 rounded-lg font-mono text-sm md:text-base border border-indigo-100 shadow-inner">
+                    <p class="font-bold text-indigo-900 mb-2">计算 DP[i] (枚举当前批次从 i 到 j):</p>
+                    <div class="bg-white p-3 rounded border border-indigo-200 text-center mb-2 overflow-x-auto whitespace-nowrap">
+                        DP[i] = min<sub>i&le;j&le;n</sub> { <span class="text-blue-600">DP[j+1]</span> + <span class="text-orange-600">Cost(i, j)</span> }
+                    </div>
+                    <p class="mt-3 font-semibold text-gray-700">其中 <span class="text-orange-600">Cost(i, j)</span> 是将 i~j 作为一批带来的**全部后续影响** (费用提前计算):</p>
+                    <div class="bg-white p-3 rounded border border-indigo-200 mt-2 overflow-x-auto whitespace-nowrap">
+                        <span class="text-orange-600">Cost(i, j)</span> = (<span class="text-red-500">S</span> + &Sigma;<sub>k=i..j</sub>T[k]) &times; (&Sigma;<sub>k=i..n</sub>F[k])
+                    </div>
+                    <p class="text-xs text-gray-500 mt-2 italic">含义：新建一批 i~j 耗时为(准备时间S + 这批任务总处理时间)。这个时间会增加到任务 i 及其**之后所有任务**的完成时间中。所以一次性计算代价：增加的时间 &times; 后面所有任务的权重和。</p>
+                </div>
+            </div>
+
+            <!-- 当前计算动态演示区 -->
+            <div class="bg-white p-5 rounded-xl shadow-md border border-gray-200 flex-1 relative min-h-[400px]">
+                <h2 class="text-xl font-semibold mb-4 border-b pb-2 flex justify-between items-center">
+                    <span>当前计算推演 (Calculation Process)</span>
+                    <span v-if="currentI > 0 && currentI <= n" class="bg-blue-100 text-blue-800 text-sm px-3 py-1 rounded-full font-mono">
+                        正在计算 DP[{{currentI}}]
+                    </span>
+                </h2>
+
+                <!-- 未开始状态 -->
+                <div v-if="!isRunning && !isFinished" class="absolute inset-0 flex items-center justify-center bg-white bg-opacity-90 z-10">
+                    <p class="text-gray-500 text-lg flex items-center gap-2">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        点击左侧 "开始推导"
+                    </p>
+                </div>
+
+                <!-- 计算完成状态 -->
+                <div v-if="isFinished" class="p-6 bg-green-50 border border-green-200 rounded-xl text-center shadow-inner mt-4">
+                    <h3 class="text-2xl font-bold text-green-700 mb-2">🎉 计算完成！</h3>
+                    <p class="text-lg text-gray-700">
+                        将所有任务 (1 到 {{n}}) 划分为批次的最小总费用为: 
+                        <strong class="text-3xl text-green-600 block mt-2">{{ DP[1] }}</strong>
+                    </p>
+                    
+                    <!-- 最终划分方案回溯展示 -->
+                    <div class="mt-6 text-left bg-white p-4 rounded shadow-sm border border-green-100">
+                        <h4 class="font-bold text-gray-800 border-b pb-2 mb-3">最优批次划分方案回溯：</h4>
+                        <div class="flex flex-wrap gap-2">
+                            <template v-for="(batch, idx) in optimalBatches" :key="'ob'+idx">
+                                <div class="bg-green-100 border border-green-300 rounded px-3 py-2">
+                                    <span class="text-xs text-green-600 font-bold block mb-1">批次 {{idx + 1}}</span>
+                                    <span class="font-mono font-medium">
+                                        任务 {{ batch.start }} 
+                                        <span v-if="batch.start !== batch.end">~ {{ batch.end }}</span>
+                                    </span>
+                                </div>
+                                <div v-if="idx < optimalBatches.length - 1" class="flex items-center text-gray-400">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 正在计算的过程动画 -->
+                <div v-if="isRunning && !isFinished" class="space-y-6">
+                    
+                    <!-- 任务流可视化 -->
+                    <div>
+                        <p class="text-sm font-bold text-gray-600 mb-2">任务流与当前尝试的划分:</p>
+                        <div class="flex flex-wrap gap-1 items-center bg-gray-50 p-3 rounded-lg border border-gray-200">
+                            <template v-for="i in n" :key="'task'+i">
+                                <div class="flex flex-col items-center">
+                                    <div class="w-12 h-12 flex items-center justify-center rounded border-2 font-bold transition-all duration-300 relative"
+                                         :class="getTaskVisualClass(i)">
+                                        {{ i }}
+                                        <!-- 批次标记 -->
+                                        <div v-if="i === currentI" class="absolute -top-6 text-xs bg-blue-500 text-white px-1 rounded whitespace-nowrap">当前起</div>
+                                        <div v-if="i === currentJ" class="absolute -bottom-6 text-xs bg-orange-500 text-white px-1 rounded whitespace-nowrap shadow">试切</div>
+                                        
+                                        <!-- 已确定最优批次标记 (在之前求过的DP中) -->
+                                        <div v-if="i > currentI && i === bestJ[i]" class="absolute -bottom-2 -right-2 w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow"></div>
+                                    </div>
+                                    <div class="text-[10px] text-gray-500 mt-1 flex gap-1">
+                                        <span title="耗时 T">T:{{T[i]}}</span> <span title="权重 F">F:{{F[i]}}</span>
+                                    </div>
+                                </div>
+                                <!-- 连接线/切分线 -->
+                                <div v-if="i < n" class="w-4 h-0.5 transition-all duration-300"
+                                     :class="{'bg-gray-300': i < currentI || i > currentJ, 'bg-orange-400 h-1': i >= currentI && i < currentJ}">
+                                </div>
+                            </template>
+                            <!-- 虚拟任务 n+1 作为结束标记 -->
+                             <div class="w-10 h-10 border-2 border-dashed border-gray-400 rounded flex items-center justify-center text-gray-400 bg-gray-100 font-mono text-xs ml-2">End</div>
+                        </div>
+                    </div>
+
+                    <!-- 计算详情面板 -->
+                    <div v-if="currentJ > 0" class="bg-slate-50 rounded-xl border border-slate-200 p-4 shadow-sm relative overflow-hidden">
+                        <!-- 装饰背景 -->
+                        <div class="absolute -right-10 -top-10 w-32 h-32 bg-blue-100 rounded-full opacity-50 blur-xl"></div>
+                        
+                        <div class="flex items-center justify-between border-b border-slate-200 pb-2 mb-3 relative z-10">
+                            <h4 class="font-bold text-slate-700">尝试批次划分：任务 {{ currentI }} ~ {{ currentJ }}</h4>
+                            <span class="text-sm bg-slate-200 px-2 py-1 rounded font-mono">j = {{ currentJ }}</span>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 relative z-10">
+                            <!-- 成本计算分解 -->
+                            <div class="space-y-2 text-sm">
+                                <div class="flex justify-between bg-white p-2 rounded border border-gray-100">
+                                    <span class="text-gray-600">固定准备时间 (S):</span>
+                                    <span class="font-mono text-red-600 font-bold">{{ S }}</span>
+                                </div>
+                                <div class="flex justify-between bg-white p-2 rounded border border-gray-100">
+                                    <span class="text-gray-600">批次处理耗时 (&Sigma;T):</span>
+                                    <span class="font-mono text-blue-600 font-bold">{{ sumT(currentI, currentJ) }}</span>
+                                </div>
+                                <div class="flex justify-between bg-white p-2 rounded border border-gray-100">
+                                    <span class="text-gray-600">受影响任务总权重 (&Sigma;F):</span>
+                                    <span class="font-mono text-green-600 font-bold">{{ sumF(currentI, n) }}</span>
+                                </div>
+                                <div class="bg-orange-50 border border-orange-200 p-2 rounded mt-2">
+                                    <div class="flex justify-between font-bold text-orange-800">
+                                        <span>Cost(i, j) 产生费用:</span>
+                                        <span class="font-mono">{{ currentCost }}</span>
+                                    </div>
+                                    <div class="text-xs text-orange-600/80 mt-1 text-right">
+                                        ({{ S }} + {{ sumT(currentI, currentJ) }}) &times; {{ sumF(currentI, n) }}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- DP 转移 -->
+                            <div class="flex flex-col justify-center bg-white p-4 rounded-lg border border-blue-100 shadow-sm relative">
+                                <div class="text-center mb-2">
+                                    <span class="text-xs text-gray-500 uppercase tracking-wide">加上后续最优解</span>
+                                </div>
+                                <div class="flex items-center justify-center gap-3 font-mono text-lg mb-4">
+                                    <span class="text-orange-600 font-bold" title="当前批次造成的影响">{{ currentCost }}</span>
+                                    <span class="text-gray-400">+</span>
+                                    <div class="flex flex-col items-center">
+                                        <span class="text-blue-700 font-bold bg-blue-50 px-2 rounded border border-blue-200" title="DP[j+1]">DP[{{ currentJ + 1 }}]</span>
+                                        <span class="text-sm mt-1">{{ DP[currentJ + 1] }}</span>
+                                    </div>
+                                    <span class="text-gray-400">=</span>
+                                    <span class="font-bold text-2xl" :class="isNewMin ? 'text-green-600 scale-110 transition-transform' : 'text-gray-700'">{{ currentTotalVal }}</span>
+                                </div>
+                                
+                                <div class="bg-gray-100 rounded p-2 text-center text-sm border" :class="isNewMin ? 'border-green-400 bg-green-50 text-green-800' : 'border-gray-200 text-gray-500'">
+                                    <div v-if="isNewMin">
+                                        <span class="font-bold">✨ 发现更优解！</span><br/>
+                                        更新 DP[{{ currentI }}] = {{ currentTotalVal }}
+                                    </div>
+                                    <div v-else>
+                                        未优于当前已知最小值 ({{ DP[currentI] }})
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 历史尝试记录 (针对当前 i) -->
+                    <div v-if="historyForCurrentI.length > 0" class="mt-4">
+                        <p class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">针对 DP[{{currentI}}] 的枚举记录:</p>
+                        <div class="flex gap-2 overflow-x-auto pb-2">
+                            <div v-for="(record, idx) in historyForCurrentI" :key="'hist'+idx" 
+                                 class="min-w-[100px] bg-white border rounded p-2 text-center text-sm shadow-sm"
+                                 :class="record.isBest ? 'border-green-400 bg-green-50' : 'border-gray-200'">
+                                <div class="text-gray-500 text-xs mb-1 border-b pb-1">切分 j={{ record.j }}</div>
+                                <div class="font-mono font-bold" :class="record.isBest ? 'text-green-700' : 'text-gray-600'">{{ record.val }}</div>
+                                <div v-if="record.isBest" class="text-[10px] text-green-600 mt-1 font-bold">最优 ⭐</div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, computed, watch, nextTick } = Vue;
+
+    createApp({
+        setup() {
+            // 初始默认数据
+            const defaultS = 1;
+            const defaultT = [0, 1, 3, 4, 2, 1]; // 0 占位, 任务1-5耗时
+            const defaultF = [0, 3, 2, 3, 1, 4]; // 0 占位, 任务1-5权重
+            const defaultN = 5;
+
+            // 响应式数据
+            const n = ref(defaultN);
+            const S = ref(defaultS);
+            const T = ref([...defaultT]);
+            const F = ref([...defaultF]);
+            
+            // DP 状态
+            // 为了方便倒序，数组大小开 n+2，DP[n+1] = 0 为边界
+            const DP = ref(Array(defaultN + 2).fill(Infinity));
+            const bestJ = ref(Array(defaultN + 2).fill(-1));
+            
+            // 模拟控制状态
+            const isRunning = ref(false);
+            const isFinished = ref(false);
+            const isAnimating = ref(false);
+            
+            // 当前执行位置
+            const currentI = ref(-1);
+            const currentJ = ref(-1);
+            
+            // UI展示用计算值
+            const currentCost = ref(0);
+            const currentTotalVal = ref(0);
+            const isNewMin = ref(false);
+            const historyForCurrentI = ref([]);
+
+            // 前缀和计算函数 (动态计算，避免修改输入时出错)
+            const sumT = (start, end) => {
+                let sum = 0;
+                for(let k=start; k<=end; k++) sum += T.value[k];
+                return sum;
+            };
+            const sumF = (start, end) => {
+                let sum = 0;
+                for(let k=start; k<=end; k++) sum += F.value[k];
+                return sum;
+            };
+
+            // 最终的批次划分方案
+            const optimalBatches = computed(() => {
+                if (!isFinished.value) return [];
+                const batches = [];
+                let i = 1;
+                while (i <= n.value && bestJ.value[i] !== -1) {
+                    let j = bestJ.value[i];
+                    batches.push({ start: i, end: j });
+                    i = j + 1;
+                }
+                return batches;
+            });
+
+            const statusMessage = computed(() => {
+                if (!isRunning.value && !isFinished.value) return "等待开始。请设定参数后点击 '开始推导'。";
+                if (isFinished.value) return "推导完成。最优总费用已求出。";
+                
+                if (currentI.value > 0) {
+                    if (currentJ.value > 0) {
+                        return `正在计算 DP[${currentI.value}]。尝试将任务 ${currentI.value} 到 ${currentJ.value} 作为一批...`;
+                    } else {
+                        return `准备计算 DP[${currentI.value}]。将枚举 j 从 ${currentI.value} 到 ${n.value}。`;
+                    }
+                }
+                return "准备中...";
+            });
+
+            // 控制逻辑
+            const startSimulation = () => {
+                // 初始化
+                DP.value = Array(n.value + 2).fill(Infinity);
+                DP.value[n.value + 1] = 0; // 边界条件
+                bestJ.value = Array(n.value + 2).fill(-1);
+                
+                isRunning.value = true;
+                isFinished.value = false;
+                currentI.value = n.value; // 从 n 开始倒序推导
+                currentJ.value = n.value;
+                historyForCurrentI.value = [];
+                
+                prepareStep();
+            };
+
+            const resetSimulation = () => {
+                isRunning.value = false;
+                isFinished.value = false;
+                currentI.value = -1;
+                currentJ.value = -1;
+                DP.value = Array(n.value + 2).fill(Infinity);
+                bestJ.value = Array(n.value + 2).fill(-1);
+                historyForCurrentI.value = [];
+            };
+
+            const resetToInitial = () => {
+                S.value = defaultS;
+                T.value = [...defaultT];
+                F.value = [...defaultF];
+                resetSimulation();
+            };
+
+            // 核心推导逻辑单步执行
+            // 状态机：每个 step 可能是在计算一个 j，或者切换到下一个 i
+            let stepPhase = 0; // 0: 准备计算新的 i 和 j, 1: 展示计算结果并更新
+
+            const prepareStep = () => {
+                if (currentI.value < 1) {
+                    finishSimulation();
+                    return;
+                }
+                
+                // 计算当前的 Cost 和 Total
+                let cost = (S.value + sumT(currentI.value, currentJ.value)) * sumF(currentI.value, n.value);
+                currentCost.value = cost;
+                let total = cost + DP.value[currentJ.value + 1];
+                currentTotalVal.value = total;
+                
+                isNewMin.value = total < DP.value[currentI.value];
+            };
+
+            const stepForward = () => {
+                if (!isRunning.value || isFinished.value || isAnimating.value) return;
+                
+                isAnimating.value = true;
+                
+                if (stepPhase === 0) {
+                    // Phase 0: 已经展示了准备数据，现在执行更新
+                    if (isNewMin.value) {
+                        DP.value[currentI.value] = currentTotalVal.value;
+                        bestJ.value[currentI.value] = currentJ.value;
+                    }
+                    
+                    // 记录历史
+                    historyForCurrentI.value.push({
+                        j: currentJ.value,
+                        val: currentTotalVal.value,
+                        isBest: isNewMin.value
+                    });
+                    
+                    // 更新历史记录中的最优标记 (只保留当前已知的真正最优)
+                    let currentMin = Math.min(...historyForCurrentI.value.map(r => r.val));
+                    historyForCurrentI.value.forEach(r => r.isBest = r.val === currentMin);
+
+                    stepPhase = 1;
+                    
+                    // 短暂延迟后允许下一步，制造动画感
+                    setTimeout(() => { isAnimating.value = false; }, 300);
+
+                } else {
+                    // Phase 1: 准备下一个 j 或者下一个 i
+                    if (currentJ.value < n.value) {
+                        // 继续尝试当前 i 的下一个 j
+                        currentJ.value++;
+                    } else {
+                        // 当前 i 的所有 j 都尝试完毕，进入下一个 i (递减)
+                        currentI.value--;
+                        if (currentI.value >= 1) {
+                            currentJ.value = currentI.value; // j 从当前的 i 开始
+                            historyForCurrentI.value = []; // 清空历史
+                        }
+                    }
+                    stepPhase = 0;
+                    
+                    if (currentI.value >= 1) {
+                        prepareStep();
+                    } else {
+                        finishSimulation();
+                    }
+                    isAnimating.value = false;
+                }
+            };
+
+            const finishSimulation = () => {
+                isFinished.value = true;
+                currentI.value = -1;
+                currentJ.value = -1;
+            };
+
+            // UI 辅助函数
+            const getTaskVisualClass = (i) => {
+                if (!isRunning.value) return 'border-gray-300 text-gray-500 bg-white';
+                
+                if (i >= currentI.value && i <= currentJ.value) {
+                    // 正在尝试的批次内
+                    return 'border-orange-500 bg-orange-100 text-orange-800 shadow-md scale-105 z-10';
+                } else if (i > currentI.value) {
+                    // 已经计算过的任务 (在右侧)
+                    return 'border-blue-300 bg-blue-50 text-blue-700 opacity-80';
+                } else if (i < currentI.value) {
+                    // 尚未计算的任务 (在左侧)
+                    return 'border-gray-300 bg-gray-100 text-gray-400';
+                }
+                return 'border-gray-300 bg-white';
+            };
+
+            const getDpCellClass = (i) => {
+                if (i === currentI.value && !isFinished.value) return 'calculating-bg font-bold shadow-inner ring-2 ring-blue-400 inset-0';
+                if (DP.value[i] !== Infinity && i > currentI.value) return 'bg-blue-50';
+                return '';
+            };
+
+            return {
+                n, S, T, F, DP, bestJ,
+                isRunning, isFinished, isAnimating,
+                currentI, currentJ, currentCost, currentTotalVal, isNewMin, historyForCurrentI,
+                statusMessage, optimalBatches,
+                startSimulation, resetSimulation, stepForward, resetToInitial,
+                sumT, sumF, getTaskVisualClass, getDpCellClass
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
